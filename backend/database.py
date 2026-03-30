@@ -13,7 +13,12 @@ _pool: asyncpg.Pool | None = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
-        _pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=5)
+        _pool = await asyncpg.create_pool(
+            settings.database_url,
+            min_size=1,
+            max_size=5,
+            statement_cache_size=0,  # Required for Supabase pgbouncer
+        )
     return _pool
 
 
