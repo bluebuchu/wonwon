@@ -1,0 +1,212 @@
+.issue-card {
+  padding: 2rem;
+  margin-bottom: 2rem;
+  text-align: left;
+}
+
+.issue-header {
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--surface-border);
+  padding-bottom: 1.5rem;
+}
+
+.issue-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.keyword {
+  background: rgba(129, 140, 248, 0.15);
+  color: #a5b4fc;
+  padding: 0.3rem 0.8rem;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid rgba(129, 140, 248, 0.3);
+}
+
+.issue-body {
+  margin-bottom: 2rem;
+}
+
+.summary {
+  color: var(--text-primary);
+  font-size: 1.05rem;
+  line-height: 1.7;
+  margin-bottom: 1.5rem;
+  opacity: 0.9;
+}
+
+.links-area {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.link-label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.news-link {
+  color: var(--accent-secondary);
+  font-size: 0.9rem;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  transition: var(--transition-smooth);
+}
+
+.news-link:hover {
+  text-decoration-color: transparent;
+  color: #fff;
+}
+
+/* 탐구 패키지 섹션 */
+.exploration-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.topic-section {
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: var(--transition-smooth);
+}
+
+.topic-section.mid {
+  border-left: 4px solid #3b82f6; /* Blue for Mid */
+}
+
+.topic-section.high {
+  border-left: 4px solid #ef4444; /* Red/Orange for High */
+}
+
+.topic-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  cursor: pointer;
+}
+
+.topic-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.topic-title-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.level-badge {
+  font-weight: 800;
+  font-size: 1.1rem;
+  white-space: nowrap;
+}
+
+.level-badge.mid { color: #60a5fa; }
+.level-badge.high { color: #f87171; }
+
+.topic-question {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: transform 0.3s ease;
+}
+
+.toggle-btn.open {
+  transform: rotate(180deg);
+}
+
+/* 내용 부분 */
+.topic-content {
+  padding: 0 1.5rem 1.5rem 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 0.5rem;
+  padding-top: 1.5rem;
+  animation: slideDown 0.3s ease forwards;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.box-title {
+  display: block;
+  font-weight: 700;
+  color: var(--accent-primary);
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.reason-box {
+  margin-bottom: 1.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.guide-box {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.grade-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.grade-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.badge {
+  background: var(--surface-color);
+  border: 1px solid var(--surface-border);
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  min-width: 45px;
+  text-align: center;
+}
+
+.grade-item p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}

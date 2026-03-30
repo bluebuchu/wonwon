@@ -1,0 +1,140 @@
+import { useState, useEffect, useCallback } from 'react';
+import './App.css';
+import { IssueCard } from './components/IssueCard';
+import { fetchLatestIssues, generateIssues } from './api';
+
+const TRACKS = [
+  { id: 'humanities', label: '인문·사회', icon: '🌍' },
+  { id: 'science',    label: '자연·공학', icon: '🔬' },
+  { id: 'medical',    label: '의약·생명', icon: '🧬' }
+];
+
+function App() {
+  const [activeTrack, setActiveTrack] = useState(TRACKS[0].id);
+  const [issues, setIssues]           = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [generating, setGenerating]   = useState(false);
+  const [error, setError]             = useState(null);
+  const [weekDate, setWeekDate]       = useState(null);
+
+  const loadIssues = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await fetchLatestIssues();
+      setIssues(data.issues || []);
+      setWeekDate(data.week_date || null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIssues();
+  }, [loadIssues]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      await generateIssues();
+      setLoading(true);
+      await loadIssues();
+    } catch (e) {
+      setError(e.message);
+      setLoading(false);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const filtered = issues.filter(issue => issue.trackId === activeTrack);
+
+  return (
+    <div className="app-container">
+      {/* 백그라운드 장식 효과 */}
+      <div className="bg-decoration shape-1" />
+      <div className="bg-decoration shape-2" />
+
+      <header className="app-header glass-panel">
+        <div className="header-content">
+          <h1 className="logo">
+            <span className="text-gradient">탐구 이슈</span> 엔진
+          </h1>
+          <p className="subtitle">매주 업데이트되는 계열별 심층 탐구 주제</p>
+          {weekDate && (
+            <p className="subtitle" style={{ fontSize: '0.9rem', marginTop: '0.25rem', opacity: 0.7 }}>
+              {weekDate} 주차
+            </p>
+          )}
+        </div>
+      </header>
+
+      <main className="main-content">
+        <nav className="track-tabs">
+          {TRACKS.map((track) => (
+            <button
+              key={track.id}
+              className={`tab-btn glass-panel ${activeTrack === track.id ? 'active' : ''}`}
+              onClick={() => setActiveTrack(track.id)}
+            >
+              <span className="tab-icon">{track.icon}</span>
+              <span className="tab-label">{track.label}</span>
+              {activeTrack === track.id && <div className="active-indicator" />}
+            </button>
+          ))}
+        </nav>
+
+        <section className="issue-list-container">
+          {loading ? (
+            <div className="glass-panel placeholder-card">
+              <p>이슈를 불러오는 중...</p>
+            </div>
+          ) : error ? (
+            <div className="glass-panel placeholder-card">
+              <p style={{ color: '#f87171', marginBottom: '1rem' }}>{error}</p>
+            </div>
+          ) : issues.length === 0 ? (
+            <div className="glass-panel placeholder-card">
+              <h2>아직 생성된 이슈가 없습니다.</h2>
+              <p style={{ marginBottom: '1.5rem' }}>이번 주 최신 뉴스로 탐구 이슈를 지금 생성할 수 있습니다.</p>
+              <button
+                className="tab-btn glass-panel active"
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{ margin: '0 auto', cursor: generating ? 'not-allowed' : 'pointer' }}
+              >
+                {generating ? '⏳ 생성 중... (1~3분 소요)' : '🚀 지금 생성하기'}
+              </button>
+            </div>
+          ) : filtered.length > 0 ? (
+            filtered.map(issue => (
+              <IssueCard key={issue.id} issue={issue} />
+            ))
+          ) : (
+            <div className="glass-panel placeholder-card">
+              <h2>이번 주 {TRACKS.find(t => t.id === activeTrack)?.label} 분야의 탐구 이슈가 준비 중입니다.</h2>
+              <p>잠시 후 다시 확인해주세요.</p>
+            </div>
+          )}
+        </section>
+
+        {issues.length > 0 && (
+          <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+            <button
+              className="tab-btn glass-panel"
+              onClick={handleGenerate}
+              disabled={generating}
+              style={{ margin: '0 auto', cursor: generating ? 'not-allowed' : 'pointer' }}
+            >
+              {generating ? '⏳ 생성 중... (1~3분 소요)' : '🔄 이번 주 이슈 새로 생성'}
+            </button>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+export default App;
