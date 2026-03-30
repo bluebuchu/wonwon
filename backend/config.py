@@ -6,7 +6,7 @@ from typing import List
 
 class Settings(BaseSettings):
     google_api_key: str = Field(default="", env="GOOGLE_API_KEY")
-    database_url: str = Field(default="./data/issues.db", env="DATABASE_URL")
+    database_url: str = Field(default="", env="DATABASE_URL")
     cors_origins: str = Field(
         default="http://localhost:5173,http://localhost:3000",
         env="CORS_ORIGINS"

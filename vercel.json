@@ -1,0 +1,15 @@
+{
+  "buildCommand": "cd frontend && npm install --legacy-peer-deps && npm run build",
+  "outputDirectory": "frontend/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300
+    }
+  },
+  "crons": [
+    { "path": "/api/cron/generate", "schedule": "0 8 * * 5" }
+  ]
+}

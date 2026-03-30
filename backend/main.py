@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database import init_db
+from routers.cron import router as cron_router
 from routers.generate import router as generate_router
 from routers.issues import router as issues_router
 from routers.mock import router as mock_router
@@ -24,28 +25,23 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown logic."""
-    # Startup
     logger.info("Starting Korean High School Exploration Topic Service...")
-
-    # Ensure data directory exists
-    data_dir = os.path.dirname(os.path.abspath(settings.database_url))
-    os.makedirs(data_dir, exist_ok=True)
-    logger.info(f"Data directory: {data_dir}")
 
     # Initialize database
     await init_db()
     logger.info("Database initialized")
 
-    # Start scheduler
-    scheduler = start_scheduler()
-    logger.info("Scheduler started")
+    # Start scheduler only in non-serverless environments
+    if not os.getenv("VERCEL"):
+        scheduler = start_scheduler()
+        logger.info("Scheduler started")
 
     yield
 
     # Shutdown
-    logger.info("Shutting down service...")
-    stop_scheduler()
-    logger.info("Scheduler stopped")
+    if not os.getenv("VERCEL"):
+        stop_scheduler()
+        logger.info("Scheduler stopped")
 
 
 app = FastAPI(
@@ -72,6 +68,7 @@ app.add_middleware(
 app.include_router(issues_router)
 app.include_router(generate_router)
 app.include_router(mock_router)
+app.include_router(cron_router)
 
 
 @app.get("/health", tags=["system"])
