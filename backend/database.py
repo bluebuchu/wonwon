@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import ssl
 import asyncpg
+from urllib.parse import urlparse
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
@@ -11,16 +12,28 @@ from config import settings
 _pool: asyncpg.Pool | None = None
 
 
+def _parse_db_url(url: str) -> dict:
+    """Parse DATABASE_URL into individual connection params for asyncpg."""
+    parsed = urlparse(url)
+    return {
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "user": parsed.username,
+        "password": parsed.password,
+        "database": parsed.path.lstrip("/"),
+    }
+
+
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
-        # Create SSL context for Supabase pooler connections
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
+        params = _parse_db_url(settings.database_url)
         _pool = await asyncpg.create_pool(
-            settings.database_url,
+            **params,
             min_size=1,
             max_size=5,
             statement_cache_size=0,  # Required for Supabase pgbouncer
