@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import asyncpg
 from typing import List, Optional
 
@@ -13,11 +14,17 @@ _pool: asyncpg.Pool | None = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
+        # Create SSL context for Supabase pooler connections
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         _pool = await asyncpg.create_pool(
             settings.database_url,
             min_size=1,
             max_size=5,
             statement_cache_size=0,  # Required for Supabase pgbouncer
+            ssl=ssl_ctx,
         )
     return _pool
 
