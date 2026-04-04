@@ -27,13 +27,32 @@ def _parse_db_url(url: str) -> dict:
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
+        import socket
+        import logging
+        logger = logging.getLogger(__name__)
+
         params = _parse_db_url(settings.database_url)
+
+        # Resolve hostname to IP - asyncpg in some environments
+        # cannot resolve Supabase pooler hostnames directly
+        original_host = params["host"]
+        try:
+            resolved_ip = socket.getaddrinfo(original_host, None)[0][4][0]
+            params["host"] = resolved_ip
+            logger.info(f"Resolved {original_host} -> {resolved_ip}")
+        except Exception as e:
+            logger.warning(f"DNS resolution failed for {original_host}: {e}")
+
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+
         _pool = await asyncpg.create_pool(
             **params,
             min_size=1,
             max_size=5,
             statement_cache_size=0,  # Required for Supabase pgbouncer
-            ssl="require",
+            ssl=ssl_ctx,
         )
     return _pool
 
