@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
     model_config = {
-        "env_file": ".env",
+        "env_file": os.path.join(os.path.dirname(__file__), ".env"),
         "env_file_encoding": "utf-8",
         "extra": "ignore",
     }

@@ -11,7 +11,10 @@ from routers.cron import router as cron_router
 from routers.generate import router as generate_router
 from routers.issues import router as issues_router
 from routers.mock import router as mock_router
-from services.scheduler import start_scheduler, stop_scheduler
+IS_VERCEL = bool(os.getenv("VERCEL"))
+
+if not IS_VERCEL:
+    from services.scheduler import start_scheduler, stop_scheduler
 
 # Configure logging
 logging.basicConfig(
@@ -32,14 +35,14 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
 
     # Start scheduler only in non-serverless environments
-    if not os.getenv("VERCEL"):
+    if not IS_VERCEL:
         scheduler = start_scheduler()
         logger.info("Scheduler started")
 
     yield
 
     # Shutdown
-    if not os.getenv("VERCEL"):
+    if not IS_VERCEL:
         stop_scheduler()
         logger.info("Scheduler stopped")
 
@@ -74,17 +77,18 @@ app.include_router(cron_router)
 @app.get("/health", tags=["system"])
 async def health_check():
     """Health check endpoint."""
-    from services.scheduler import get_scheduler
-
-    scheduler = get_scheduler()
-    scheduler_running = scheduler is not None and scheduler.running
-
+    scheduler_running = False
     next_run = None
-    if scheduler_running:
-        jobs = scheduler.get_jobs()
-        if jobs:
-            next_fire = jobs[0].next_run_time
-            next_run = next_fire.isoformat() if next_fire else None
+
+    if not IS_VERCEL:
+        from services.scheduler import get_scheduler
+        scheduler = get_scheduler()
+        scheduler_running = scheduler is not None and scheduler.running
+        if scheduler_running:
+            jobs = scheduler.get_jobs()
+            if jobs:
+                next_fire = jobs[0].next_run_time
+                next_run = next_fire.isoformat() if next_fire else None
 
     return {
         "status": "healthy",
