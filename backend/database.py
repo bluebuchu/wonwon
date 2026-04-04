@@ -23,31 +23,36 @@ async def get_pool() -> asyncpg.Pool:
 
 
 async def init_db():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS issues (
-                id TEXT PRIMARY KEY,
-                week_date TEXT NOT NULL,
-                track TEXT NOT NULL,
-                title TEXT NOT NULL,
-                data JSONB NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_issues_week_date ON issues (week_date)
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_issues_track ON issues (track)
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS weekly_batches (
-                week_date TEXT PRIMARY KEY,
-                generated_at TEXT NOT NULL,
-                issue_count INTEGER NOT NULL
-            )
-        """)
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS issues (
+                    id TEXT PRIMARY KEY,
+                    week_date TEXT NOT NULL,
+                    track TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    data JSONB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_issues_week_date ON issues (week_date)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_issues_track ON issues (track)
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_batches (
+                    week_date TEXT PRIMARY KEY,
+                    generated_at TEXT NOT NULL,
+                    issue_count INTEGER NOT NULL
+                )
+            """)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"DB init failed: {e}")
+        raise
 
 
 async def save_batch(batch: WeeklyBatch) -> None:
