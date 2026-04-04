@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import ssl
+import socket
 import asyncpg
-from urllib.parse import urlparse
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
@@ -13,35 +14,35 @@ _pool: asyncpg.Pool | None = None
 
 
 def _parse_db_url(url: str) -> dict:
-    """Parse DATABASE_URL into individual connection params for asyncpg."""
-    parsed = urlparse(url)
+    """Parse DATABASE_URL via regex to avoid urlparse edge cases."""
+    m = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+?)(\?.*)?$', url)
+    if not m:
+        raise ValueError(f"Cannot parse DATABASE_URL (len={len(url)})")
     return {
-        "host": parsed.hostname,
-        "port": parsed.port or 5432,
-        "user": parsed.username,
-        "password": parsed.password,
-        "database": parsed.path.lstrip("/"),
+        "user": m.group(1),
+        "password": m.group(2),
+        "host": m.group(3),
+        "port": int(m.group(4)),
+        "database": m.group(5),
     }
 
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
-        import socket
         import logging
         logger = logging.getLogger(__name__)
 
         params = _parse_db_url(settings.database_url)
 
-        # Resolve hostname to IP - asyncpg in some environments
-        # cannot resolve Supabase pooler hostnames directly
+        # Resolve hostname to IP to avoid asyncpg hostname issues
         original_host = params["host"]
         try:
             resolved_ip = socket.getaddrinfo(original_host, None)[0][4][0]
             params["host"] = resolved_ip
-            logger.info(f"Resolved {original_host} -> {resolved_ip}")
+            logger.info(f"DB: Resolved {original_host} -> {resolved_ip}")
         except Exception as e:
-            logger.warning(f"DNS resolution failed for {original_host}: {e}")
+            logger.warning(f"DB: DNS resolution failed for {original_host}: {e}")
 
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False

@@ -105,7 +105,7 @@ async def health_check():
 async def debug():
     """Debug endpoint to check imports and env."""
     import sys
-    info = {"version": "v5", "python": sys.version, "path": sys.path[:5], "env": {}}
+    info = {"version": "v6", "python": sys.version, "path": sys.path[:5], "env": {}}
 
     # Check env vars
     info["env"]["DATABASE_URL"] = bool(os.getenv("DATABASE_URL"))
@@ -122,28 +122,30 @@ async def debug():
             imports[mod] = str(e)
     info["imports"] = imports
 
-    # Check DB URL parsing
-    from database import _parse_db_url
+    # Check DB URL parsing step by step
     import socket
-    try:
-        db_url = settings.database_url
-        info["db_url_len"] = len(db_url)
-        info["db_url_prefix"] = db_url[:30] + "..."
-        params = _parse_db_url(db_url)
+    import re
+    db_url = settings.database_url
+    info["db_url_len"] = len(db_url)
+    info["db_url_prefix"] = db_url[:30] + "..."
+
+    # Manual regex parse to avoid any urlparse issues
+    m = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
+    if m:
         info["db_parsed"] = {
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"][:10] + "..." if params["user"] else None,
-            "database": params["database"],
+            "user": m.group(1)[:15] + "...",
+            "host": m.group(3),
+            "port": int(m.group(4)),
+            "database": m.group(5),
         }
-        # Test DNS
+        host = m.group(3)
         try:
-            resolved = socket.getaddrinfo(params["host"], None)[0][4][0]
+            resolved = socket.getaddrinfo(host, None)[0][4][0]
             info["db_dns"] = resolved
         except Exception as e:
             info["db_dns"] = f"failed: {e}"
-    except Exception as e:
-        info["db_parse_error"] = str(e)
+    else:
+        info["db_parsed"] = "regex no match"
 
     # Check DB connection
     try:
