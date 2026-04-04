@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field, ConfigDict, computed_field, model_serializer
+from pydantic import BaseModel, Field, ConfigDict, computed_field
 from datetime import datetime
 
 # English trackId values used in frontend filtering

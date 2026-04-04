@@ -1,3 +1,5 @@
+import re
+
 import feedparser
 import logging
 from datetime import datetime, timezone, timedelta
@@ -61,7 +63,6 @@ def _get_summary(entry: Any) -> str:
         if content and isinstance(content, list) and len(content) > 0:
             summary = content[0].get("value", "")
     # Strip HTML tags simply
-    import re
     summary = re.sub(r"<[^>]+>", " ", summary)
     summary = re.sub(r"\s+", " ", summary).strip()
     return summary[:500]  # Limit to 500 chars

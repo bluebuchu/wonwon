@@ -42,6 +42,27 @@
   100% { transform: translate(-30px, 60px) scale(0.9); }
 }
 
+/* Header Content */
+.header-content {
+  position: relative;
+}
+
+/* Main Content */
+.main-content {
+  position: relative;
+}
+
+/* Issue List */
+.issue-list-container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tab Label */
+.tab-label {
+  font-size: inherit;
+}
+
 /* Header */
 .app-header {
   padding: 2rem;

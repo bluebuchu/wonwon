@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from google import genai
@@ -26,7 +26,7 @@ def _get_client():
 def _get_current_week_date() -> str:
     """Return this week's Monday date as YYYY-MM-DD."""
     today = datetime.now(timezone.utc)
-    monday = today - __import__("datetime").timedelta(days=today.weekday())
+    monday = today - timedelta(days=today.weekday())
     return monday.strftime("%Y-%m-%d")
 
 
