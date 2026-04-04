@@ -31,8 +31,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Korean High School Exploration Topic Service...")
 
     # Initialize database
-    await init_db()
-    logger.info("Database initialized")
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.error(f"Database init failed (non-fatal): {e}")
 
     # Start scheduler only in non-serverless environments
     if not IS_VERCEL:
@@ -96,6 +99,40 @@ async def health_check():
         "scheduler_running": scheduler_running,
         "next_generation": next_run,
     }
+
+
+@app.get("/api/debug", tags=["system"])
+async def debug():
+    """Debug endpoint to check imports and env."""
+    import sys
+    info = {"python": sys.version, "path": sys.path[:5], "env": {}}
+
+    # Check env vars
+    info["env"]["DATABASE_URL"] = bool(os.getenv("DATABASE_URL"))
+    info["env"]["GOOGLE_API_KEY"] = bool(os.getenv("GOOGLE_API_KEY"))
+    info["env"]["VERCEL"] = os.getenv("VERCEL", "not set")
+
+    # Check imports
+    imports = {}
+    for mod in ["asyncpg", "feedparser", "google.genai", "pydantic", "pydantic_settings"]:
+        try:
+            __import__(mod)
+            imports[mod] = "ok"
+        except Exception as e:
+            imports[mod] = str(e)
+    info["imports"] = imports
+
+    # Check DB
+    try:
+        from database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            val = await conn.fetchval("SELECT 1")
+            info["db"] = f"connected (test={val})"
+    except Exception as e:
+        info["db"] = f"error: {e}"
+
+    return info
 
 
 @app.get("/", tags=["system"])
