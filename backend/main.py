@@ -103,18 +103,17 @@ async def health_check():
 
 @app.get("/api/debug", tags=["system"])
 async def debug():
-    """Debug endpoint to check imports and env."""
+    """Debug endpoint to check system status."""
     import sys
-    info = {"version": "v9", "python": sys.version, "path": sys.path[:5], "env": {}}
+    info = {"python": sys.version, "env": {}}
 
-    # Check env vars
     info["env"]["DATABASE_URL"] = bool(os.getenv("DATABASE_URL"))
     info["env"]["GOOGLE_API_KEY"] = bool(os.getenv("GOOGLE_API_KEY"))
     info["env"]["VERCEL"] = os.getenv("VERCEL", "not set")
 
     # Check imports
     imports = {}
-    for mod in ["asyncpg", "feedparser", "google.genai", "pydantic", "pydantic_settings"]:
+    for mod in ["asyncpg", "feedparser", "google.genai", "pydantic"]:
         try:
             __import__(mod)
             imports[mod] = "ok"
@@ -122,57 +121,13 @@ async def debug():
             imports[mod] = str(e)
     info["imports"] = imports
 
-    # Check DB URL parsing step by step
-    import socket
-    import re
-    db_url = settings.database_url
-    info["db_url_len"] = len(db_url)
-    info["db_url_prefix"] = db_url[:30] + "..."
-
-    # Manual regex parse to avoid any urlparse issues
-    m = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
-    if m:
-        info["db_parsed"] = {
-            "user": m.group(1),
-            "pass_len": len(m.group(2)),
-            "pass_first3": m.group(2)[:3] + "...",
-            "host": m.group(3),
-            "port": int(m.group(4)),
-            "database": m.group(5),
-        }
-        host = m.group(3)
-        try:
-            resolved = socket.getaddrinfo(host, None)[0][4][0]
-            info["db_dns"] = resolved
-        except Exception as e:
-            info["db_dns"] = f"failed: {e}"
-    else:
-        info["db_parsed"] = "regex no match"
-
-    # Check DB connection and data
+    # Check DB
     try:
         from database import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
             val = await conn.fetchval("SELECT 1")
             info["db"] = f"connected (test={val})"
-
-            # Check stored data
-            row = await conn.fetchrow(
-                "SELECT id, week_date, track, title FROM issues LIMIT 1"
-            )
-            if row:
-                info["sample_row"] = dict(row)
-
-            # Try reading JSONB data
-            jrow = await conn.fetchrow("SELECT data FROM issues LIMIT 1")
-            if jrow:
-                data = jrow["data"]
-                info["data_type"] = type(data).__name__
-                if isinstance(data, str):
-                    info["data_preview"] = data[:200]
-                elif isinstance(data, dict):
-                    info["data_keys"] = list(data.keys())[:10]
     except Exception as e:
         info["db"] = f"error: {e}"
 
