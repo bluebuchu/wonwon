@@ -137,7 +137,7 @@ async def get_issues_by_week(
                 week_date,
             )
 
-        return [IssuePackage.model_validate(dict(row["data"])) for row in rows]
+        return [IssuePackage.model_validate(json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]) for row in rows]
 
 
 async def get_issue_by_id(issue_id: str) -> Optional[IssuePackage]:
@@ -148,7 +148,8 @@ async def get_issue_by_id(issue_id: str) -> Optional[IssuePackage]:
         )
         if row is None:
             return None
-        return IssuePackage.model_validate(dict(row["data"]))
+        data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+        return IssuePackage.model_validate(data)
 
 
 async def get_all_weeks() -> List[str]:
