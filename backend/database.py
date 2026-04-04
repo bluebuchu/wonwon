@@ -5,6 +5,7 @@ import re
 import ssl
 import socket
 import asyncpg
+from urllib.parse import unquote
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
@@ -19,8 +20,8 @@ def _parse_db_url(url: str) -> dict:
     if not m:
         raise ValueError(f"Cannot parse DATABASE_URL (len={len(url)})")
     return {
-        "user": m.group(1),
-        "password": m.group(2),
+        "user": unquote(m.group(1)),
+        "password": unquote(m.group(2)),
         "host": m.group(3),
         "port": int(m.group(4)),
         "database": m.group(5),
