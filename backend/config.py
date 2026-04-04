@@ -27,11 +27,11 @@ settings = Settings()
 
 # RSS feed URLs for Korean media outlets
 RSS_FEEDS = {
-    "KBS": "https://world.kbs.co.kr/rss/rss_news.htm",
-    "MBC": "https://imnews.imbc.com/rss/news/news_00.xml",
-    "SBS": "https://news.sbs.co.kr/news/SBSNewsRss.do",
-    "조선일보": "https://www.chosun.com/arc/outboundfeeds/rss/category/national/",
-    "중앙일보": "https://rss.joins.com/joins_news_list.xml",
+    "연합뉴스": "https://www.yna.co.kr/rss/news.xml",
+    "JTBC": "https://fs.jtbc.co.kr/RSS/newsflash.xml",
+    "매일경제": "https://www.mk.co.kr/rss/30000001/",
+    "조선일보": "https://www.chosun.com/arc/outboundfeeds/rss/category/national/?outputType=xml",
+    "한국경제": "https://www.hankyung.com/feed/all-news",
     "동아일보": "https://rss.donga.com/total.xml",
     "한겨레": "https://www.hani.co.kr/rss/",
     "경향신문": "https://www.khan.co.kr/rss/rssdata/total_news.xml",
