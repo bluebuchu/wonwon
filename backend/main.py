@@ -149,13 +149,30 @@ async def debug():
     else:
         info["db_parsed"] = "regex no match"
 
-    # Check DB connection
+    # Check DB connection and data
     try:
         from database import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
             val = await conn.fetchval("SELECT 1")
             info["db"] = f"connected (test={val})"
+
+            # Check stored data
+            row = await conn.fetchrow(
+                "SELECT id, week_date, track, title FROM issues LIMIT 1"
+            )
+            if row:
+                info["sample_row"] = dict(row)
+
+            # Try reading JSONB data
+            jrow = await conn.fetchrow("SELECT data FROM issues LIMIT 1")
+            if jrow:
+                data = jrow["data"]
+                info["data_type"] = type(data).__name__
+                if isinstance(data, str):
+                    info["data_preview"] = data[:200]
+                elif isinstance(data, dict):
+                    info["data_keys"] = list(data.keys())[:10]
     except Exception as e:
         info["db"] = f"error: {e}"
 
