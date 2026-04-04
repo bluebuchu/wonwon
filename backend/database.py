@@ -35,15 +35,6 @@ async def get_pool() -> asyncpg.Pool:
 
         params = _parse_db_url(settings.database_url)
 
-        # Resolve hostname to IP to avoid asyncpg hostname issues
-        original_host = params["host"]
-        try:
-            resolved_ip = socket.getaddrinfo(original_host, None)[0][4][0]
-            params["host"] = resolved_ip
-            logger.info(f"DB: Resolved {original_host} -> {resolved_ip}")
-        except Exception as e:
-            logger.warning(f"DB: DNS resolution failed for {original_host}: {e}")
-
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
