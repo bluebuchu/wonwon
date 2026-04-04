@@ -105,7 +105,7 @@ async def health_check():
 async def debug():
     """Debug endpoint to check imports and env."""
     import sys
-    info = {"version": "v7", "python": sys.version, "path": sys.path[:5], "env": {}}
+    info = {"version": "v8", "python": sys.version, "path": sys.path[:5], "env": {}}
 
     # Check env vars
     info["env"]["DATABASE_URL"] = bool(os.getenv("DATABASE_URL"))
@@ -133,7 +133,9 @@ async def debug():
     m = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)', db_url)
     if m:
         info["db_parsed"] = {
-            "user": m.group(1)[:15] + "...",
+            "user": m.group(1),
+            "pass_len": len(m.group(2)),
+            "pass_first3": m.group(2)[:3] + "...",
             "host": m.group(3),
             "port": int(m.group(4)),
             "database": m.group(5),
