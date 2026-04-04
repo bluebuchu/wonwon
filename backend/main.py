@@ -105,7 +105,7 @@ async def health_check():
 async def debug():
     """Debug endpoint to check imports and env."""
     import sys
-    info = {"python": sys.version, "path": sys.path[:5], "env": {}}
+    info = {"version": "v3", "python": sys.version, "path": sys.path[:5], "env": {}}
 
     # Check env vars
     info["env"]["DATABASE_URL"] = bool(os.getenv("DATABASE_URL"))

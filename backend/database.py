@@ -27,17 +27,13 @@ def _parse_db_url(url: str) -> dict:
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
-
         params = _parse_db_url(settings.database_url)
         _pool = await asyncpg.create_pool(
             **params,
             min_size=1,
             max_size=5,
             statement_cache_size=0,  # Required for Supabase pgbouncer
-            ssl=ssl_ctx,
+            ssl="require",
         )
     return _pool
 
