@@ -16,6 +16,7 @@ function App() {
   const [generating, setGenerating]   = useState(false);
   const [error, setError]             = useState(null);
   const [weekDate, setWeekDate]       = useState(null);
+  const [isOffline, setIsOffline]     = useState(!navigator.onLine);
 
   const loadIssues = useCallback(async () => {
     try {
@@ -32,6 +33,20 @@ function App() {
 
   useEffect(() => {
     loadIssues();
+  }, [loadIssues]);
+
+  useEffect(() => {
+    const goOffline = () => setIsOffline(true);
+    const goOnline = () => {
+      setIsOffline(false);
+      loadIssues();
+    };
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online', goOnline);
+    return () => {
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online', goOnline);
+    };
   }, [loadIssues]);
 
   const handleGenerate = async () => {
@@ -53,6 +68,11 @@ function App() {
 
   return (
     <div className="app-container">
+      {isOffline && (
+        <div className="offline-banner">
+          오프라인 상태입니다. 마지막으로 불러온 데이터를 표시합니다.
+        </div>
+      )}
       {/* 백그라운드 장식 효과 */}
       <div className="bg-decoration shape-1" />
       <div className="bg-decoration shape-2" />
