@@ -24,10 +24,11 @@ def _get_client():
 
 
 def _get_current_week_date() -> str:
-    """Return this week's Monday date as YYYY-MM-DD."""
+    """Return this week's Friday date as YYYY-MM-DD."""
     today = datetime.now(timezone.utc)
-    monday = today - timedelta(days=today.weekday())
-    return monday.strftime("%Y-%m-%d")
+    days_since_friday = (today.weekday() - 4) % 7
+    friday = today - timedelta(days=days_since_friday)
+    return friday.strftime("%Y-%m-%d")
 
 
 CLUSTERING_SYSTEM_PROMPT = """당신은 국내 고등학생 탐구활동 설계를 돕는 계열별 탐구 큐레이터다.
