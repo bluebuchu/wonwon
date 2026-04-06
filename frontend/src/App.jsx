@@ -69,8 +69,12 @@ function App() {
   const formatWeekLabel = (dateStr) => {
     if (!dateStr) return null;
     const d = new Date(dateStr + 'T00:00:00+09:00');
-    const month = d.getMonth() + 1;
-    const weekNum = Math.ceil(d.getDate() / 7);
+    // 해당 주의 금요일 기준으로 계산 (월요일이 오면 +4, 금요일이면 +0)
+    const day = d.getDay(); // 0=일, 1=월, ..., 5=금
+    const daysToFriday = (5 - day + 7) % 7;
+    const friday = new Date(d.getTime() + daysToFriday * 86400000);
+    const month = friday.getMonth() + 1;
+    const weekNum = Math.ceil(friday.getDate() / 7);
     const weekNames = ['첫째', '둘째', '셋째', '넷째', '다섯째'];
     return `${month}월 ${weekNames[weekNum - 1]}주 주간 이슈 정리`;
   };
