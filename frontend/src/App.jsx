@@ -66,6 +66,15 @@ function App() {
 
   const filtered = issues.filter(issue => issue.trackId === activeTrack);
 
+  const formatWeekLabel = (dateStr) => {
+    if (!dateStr) return null;
+    const d = new Date(dateStr + 'T00:00:00+09:00');
+    const month = d.getMonth() + 1;
+    const weekNum = Math.ceil(d.getDate() / 7);
+    const weekNames = ['첫째', '둘째', '셋째', '넷째', '다섯째'];
+    return `${month}월 ${weekNames[weekNum - 1]}주 주간 이슈 정리`;
+  };
+
   return (
     <div className="app-container">
       {isOffline && (
@@ -85,7 +94,7 @@ function App() {
           <p className="subtitle">매주 업데이트되는 계열별 심층 탐구 주제</p>
           {weekDate && (
             <p className="subtitle" style={{ fontSize: '0.9rem', marginTop: '0.25rem', opacity: 0.7 }}>
-              {weekDate} 주차
+              {formatWeekLabel(weekDate)}
             </p>
           )}
         </div>
