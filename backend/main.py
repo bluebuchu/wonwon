@@ -139,26 +139,44 @@ async def debug():
 @app.get("/api/db-check", tags=["system"])
 async def db_check():
     """Temporary: diagnose DATABASE_URL on Vercel."""
-    import re
+    from urllib.parse import urlparse
+
     raw = os.getenv("DATABASE_URL", "")
     from config import settings
     used = settings.database_url
 
-    def mask(url):
-        if not url:
-            return "(empty)"
-        m = re.match(r'(postgresql://[^:]+:)(.+)(@.+)', url)
-        if m:
-            pw = m.group(2)
-            return f"{m.group(1)}[len={len(pw)}, first={pw[0] if pw else '?'}, last={pw[-1] if pw else '?'}]{m.group(3)}"
-        return f"(unparseable, len={len(url)})"
+    info = {}
 
-    info = {
-        "raw_env": mask(raw),
-        "settings": mask(used),
-        "same": raw == used,
-    }
+    # 1. Raw env
+    if raw:
+        p = urlparse(raw)
+        info["raw_env"] = {
+            "user": p.username,
+            "pass_len": len(p.password) if p.password else 0,
+            "pass_first": p.password[0] if p.password else None,
+            "pass_last": p.password[-1] if p.password else None,
+            "host": p.hostname,
+            "port": p.port,
+            "db": p.path.lstrip("/"),
+        }
+    else:
+        info["raw_env"] = "(empty)"
 
+    # 2. Settings value
+    if used:
+        p2 = urlparse(used)
+        info["settings"] = {
+            "user": p2.username,
+            "pass_len": len(p2.password) if p2.password else 0,
+            "host": p2.hostname,
+            "port": p2.port,
+        }
+    else:
+        info["settings"] = "(empty)"
+
+    info["same"] = raw == used
+
+    # 3. DB connection test
     try:
         from database import get_pool
         pool = await get_pool()
