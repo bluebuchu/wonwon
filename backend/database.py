@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import ssl
 import asyncpg
 from urllib.parse import urlparse
@@ -31,6 +32,14 @@ async def get_pool() -> asyncpg.Pool:
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
         params = _parse_db_url(settings.database_url)
+
+        # Force IPv4 to avoid "Address family not supported" on Vercel
+        host = params["host"]
+        try:
+            ipv4 = socket.getaddrinfo(host, params["port"], socket.AF_INET)[0][4][0]
+            params["host"] = ipv4
+        except socket.gaierror:
+            pass  # fallback to original hostname
 
         _pool = await asyncpg.create_pool(
             **params,
