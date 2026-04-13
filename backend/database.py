@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 import ssl
-import socket
 import asyncpg
-from urllib.parse import unquote, quote
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
@@ -14,39 +11,18 @@ from config import settings
 _pool: asyncpg.Pool | None = None
 
 
-def _parse_db_url(url: str) -> dict:
-    """Parse DATABASE_URL — password is taken as-is (no unquote)."""
-    m = re.match(r'postgresql://([^:]+):(.+)@([^@:]+):(\d+)/(.+?)(\?.*)?$', url)
-    if not m:
-        raise ValueError(f"Cannot parse DATABASE_URL (len={len(url)})")
-    return {
-        "user": m.group(1),
-        "password": m.group(2),
-        "host": m.group(3),
-        "port": int(m.group(4)),
-        "database": m.group(5),
-    }
-
-
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
-        import logging
-        logger = logging.getLogger(__name__)
-
-        params = _parse_db_url(settings.database_url)
-
-        # Supabase pgbouncer uses self-signed certs; enforce TLS encryption
-        # but skip certificate verification for compatibility
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
         _pool = await asyncpg.create_pool(
-            **params,
+            dsn=settings.database_url,
             min_size=1,
             max_size=5,
-            statement_cache_size=0,  # Required for Supabase pgbouncer
+            statement_cache_size=0,
             ssl=ssl_ctx,
         )
     return _pool
