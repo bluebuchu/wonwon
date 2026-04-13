@@ -3,12 +3,24 @@ from __future__ import annotations
 import json
 import ssl
 import asyncpg
+from urllib.parse import urlparse
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
 from config import settings
 
 _pool: asyncpg.Pool | None = None
+
+
+def _parse_db_url(db_url: str):
+    parsed = urlparse(db_url)
+    return {
+        "user": parsed.username,
+        "password": parsed.password,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "database": parsed.path.lstrip("/"),
+    }
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -18,8 +30,10 @@ async def get_pool() -> asyncpg.Pool:
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
+        params = _parse_db_url(settings.database_url)
+
         _pool = await asyncpg.create_pool(
-            dsn=settings.database_url,
+            **params,
             min_size=1,
             max_size=5,
             statement_cache_size=0,
