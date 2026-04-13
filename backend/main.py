@@ -136,6 +136,41 @@ async def debug():
     return info
 
 
+@app.get("/api/db-check", tags=["system"])
+async def db_check():
+    """Temporary: diagnose DATABASE_URL on Vercel."""
+    import re
+    raw = os.getenv("DATABASE_URL", "")
+    from config import settings
+    used = settings.database_url
+
+    def mask(url):
+        if not url:
+            return "(empty)"
+        m = re.match(r'(postgresql://[^:]+:)(.+)(@.+)', url)
+        if m:
+            pw = m.group(2)
+            return f"{m.group(1)}[len={len(pw)}, first={pw[0] if pw else '?'}, last={pw[-1] if pw else '?'}]{m.group(3)}"
+        return f"(unparseable, len={len(url)})"
+
+    info = {
+        "raw_env": mask(raw),
+        "settings": mask(used),
+        "same": raw == used,
+    }
+
+    try:
+        from database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            val = await conn.fetchval("SELECT 1")
+            info["db"] = f"connected ({val})"
+    except Exception as e:
+        info["db"] = f"error: {e}"
+
+    return info
+
+
 @app.get("/", tags=["system"])
 async def root():
     """Root endpoint with service information."""
