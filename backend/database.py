@@ -36,7 +36,11 @@ async def get_pool() -> asyncpg.Pool:
 
         params = _parse_db_url(settings.database_url)
 
+        # Supabase pgbouncer uses self-signed certs; enforce TLS encryption
+        # but skip certificate verification for compatibility
         ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
 
         _pool = await asyncpg.create_pool(
             **params,
