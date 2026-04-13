@@ -37,8 +37,6 @@ async def get_pool() -> asyncpg.Pool:
         params = _parse_db_url(settings.database_url)
 
         ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
 
         _pool = await asyncpg.create_pool(
             **params,
@@ -76,6 +74,74 @@ async def init_db():
                     generated_at TEXT NOT NULL,
                     issue_count INTEGER NOT NULL
                 )
+            """)
+
+            # Enable RLS on tables
+            await conn.execute("ALTER TABLE issues ENABLE ROW LEVEL SECURITY")
+            await conn.execute("ALTER TABLE weekly_batches ENABLE ROW LEVEL SECURITY")
+
+            # Allow public read access (anon users can read issues)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'issues_select_policy'
+                    ) THEN
+                        CREATE POLICY issues_select_policy ON issues
+                            FOR SELECT USING (true);
+                    END IF;
+                END $$
+            """)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'weekly_batches_select_policy'
+                    ) THEN
+                        CREATE POLICY weekly_batches_select_policy ON weekly_batches
+                            FOR SELECT USING (true);
+                    END IF;
+                END $$
+            """)
+
+            # Only service_role (backend) can insert/update/delete
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'issues_insert_policy'
+                    ) THEN
+                        CREATE POLICY issues_insert_policy ON issues
+                            FOR INSERT WITH CHECK (current_setting('role') = 'service_role');
+                    END IF;
+                END $$
+            """)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'issues_update_policy'
+                    ) THEN
+                        CREATE POLICY issues_update_policy ON issues
+                            FOR UPDATE USING (current_setting('role') = 'service_role');
+                    END IF;
+                END $$
+            """)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'issues_delete_policy'
+                    ) THEN
+                        CREATE POLICY issues_delete_policy ON issues
+                            FOR DELETE USING (current_setting('role') = 'service_role');
+                    END IF;
+                END $$
+            """)
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_policies WHERE policyname = 'weekly_batches_modify_policy'
+                    ) THEN
+                        CREATE POLICY weekly_batches_modify_policy ON weekly_batches
+                            FOR ALL USING (current_setting('role') = 'service_role');
+                    END IF;
+                END $$
             """)
     except Exception as e:
         import logging

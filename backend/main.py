@@ -2,8 +2,10 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from auth import verify_api_key
 
 from config import settings
 from database import init_db
@@ -61,10 +63,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware - allow all origins in development
+# CORS middleware - restrict to configured origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -101,7 +103,7 @@ async def health_check():
     }
 
 
-@app.get("/api/debug", tags=["system"])
+@app.get("/api/debug", tags=["system"], dependencies=[Depends(verify_api_key)])
 async def debug():
     """Debug endpoint to check system status."""
     import sys

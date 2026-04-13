@@ -1,8 +1,11 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Header, HTTPException
+import os
 
+from fastapi import APIRouter, Depends, Header, HTTPException
+
+from auth import verify_api_key
 from database import save_batch
 from models import WeeklyBatch
 from services.claude_engine import run_weekly_generation
@@ -15,7 +18,16 @@ router = APIRouter(prefix="/api/cron", tags=["cron"])
 
 @router.get("/generate")
 async def cron_generate(x_vercel_cron: str | None = Header(default=None)):
-    """Called by Vercel Cron every Friday at 17:00 KST."""
+    """Called by Vercel Cron every Friday at 17:00 KST.
+
+    Vercel cron jobs are authenticated via the CRON_SECRET env var.
+    Manual calls require X-Api-Key header.
+    """
+    cron_secret = os.getenv("CRON_SECRET", "")
+    if not x_vercel_cron and not cron_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized cron call.")
+    if x_vercel_cron and cron_secret and x_vercel_cron != cron_secret:
+        raise HTTPException(status_code=401, detail="Invalid cron secret.")
     logger.info(f"[Cron] Weekly generation triggered at {datetime.now(timezone.utc).isoformat()}")
 
     try:

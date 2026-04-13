@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from auth import verify_api_key
 from database import save_batch
 from models import GenerateResponse, WeeklyBatch
 from services.claude_engine import run_weekly_generation
@@ -57,7 +58,7 @@ async def _run_pipeline() -> tuple[int, str]:
         _generation_in_progress = False
 
 
-@router.post("/generate", response_model=GenerateResponse)
+@router.post("/generate", response_model=GenerateResponse, dependencies=[Depends(verify_api_key)])
 async def trigger_generation():
     """
     Manually trigger the full generation pipeline.
