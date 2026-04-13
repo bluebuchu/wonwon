@@ -5,7 +5,7 @@ import re
 import ssl
 import socket
 import asyncpg
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from typing import List, Optional
 
 from models import IssuePackage, WeeklyBatch
@@ -15,13 +15,13 @@ _pool: asyncpg.Pool | None = None
 
 
 def _parse_db_url(url: str) -> dict:
-    """Parse DATABASE_URL via regex to avoid urlparse edge cases."""
-    m = re.match(r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+?)(\?.*)?$', url)
+    """Parse DATABASE_URL — password is taken as-is (no unquote)."""
+    m = re.match(r'postgresql://([^:]+):(.+)@([^@:]+):(\d+)/(.+?)(\?.*)?$', url)
     if not m:
         raise ValueError(f"Cannot parse DATABASE_URL (len={len(url)})")
     return {
-        "user": unquote(m.group(1)),
-        "password": unquote(m.group(2)),
+        "user": m.group(1),
+        "password": m.group(2),
         "host": m.group(3),
         "port": int(m.group(4)),
         "database": m.group(5),
