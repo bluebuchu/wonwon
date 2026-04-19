@@ -66,6 +66,73 @@ function App() {
 
   const filtered = issues.filter(issue => issue.trackId === activeTrack);
 
+  const downloadTrackText = () => {
+    const track = TRACKS.find(t => t.id === activeTrack);
+    const trackLabel = track?.label || '이슈';
+    const weekLabel = formatWeekLabel(weekDate) || '주간 이슈 정리';
+
+    const lines = [];
+    lines.push(`${trackLabel} ${weekLabel}`);
+    lines.push('='.repeat(40));
+    if (weekDate) lines.push(`생성 주차: ${weekDate}`);
+    lines.push('');
+
+    filtered.forEach((issue, idx) => {
+      lines.push(`[${idx + 1}] ${issue.title}`);
+      lines.push('-'.repeat(40));
+      if (issue.keywords?.length) {
+        lines.push(`키워드: ${issue.keywords.join(', ')}`);
+      }
+      if (issue.summary) {
+        lines.push('');
+        lines.push(issue.summary);
+      }
+      if (issue.links?.length) {
+        lines.push('');
+        lines.push('대표 뉴스 출처');
+        issue.links.forEach(link => {
+          lines.push(`  - ${link.name}: ${link.url}`);
+        });
+      }
+
+      const topics = [
+        { level: '[중]', data: issue.midTopic },
+        { level: '[상]', data: issue.highTopic },
+      ];
+      topics.forEach(({ level, data }) => {
+        if (!data) return;
+        lines.push('');
+        lines.push(`${level} ${data.question}`);
+        if (data.reason) {
+          lines.push('');
+          lines.push('  주제선정 이유');
+          lines.push(`  ${data.reason}`);
+        }
+        if (data.guide) {
+          lines.push('');
+          lines.push('  학년별 접근 가이드');
+          if (data.guide.high1) lines.push(`  - 고1: ${data.guide.high1}`);
+          if (data.guide.high2) lines.push(`  - 고2: ${data.guide.high2}`);
+          if (data.guide.high3) lines.push(`  - 고3: ${data.guide.high3}`);
+        }
+      });
+
+      lines.push('');
+      lines.push('');
+    });
+
+    const text = lines.join('\n');
+    const blob = new Blob(['\ufeff', text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${trackLabel}_${weekDate || 'issues'}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const formatWeekLabel = (dateStr) => {
     if (!dateStr) return null;
     const d = new Date(dateStr + 'T00:00:00+09:00');
@@ -153,15 +220,14 @@ function App() {
           )}
         </section>
 
-        {issues.length > 0 && (
+        {filtered.length > 0 && (
           <div style={{ textAlign: 'center', marginTop: '2rem' }}>
             <button
               className="tab-btn glass-panel"
-              onClick={handleGenerate}
-              disabled={generating}
-              style={{ margin: '0 auto', cursor: generating ? 'not-allowed' : 'pointer' }}
+              onClick={downloadTrackText}
+              style={{ margin: '0 auto', cursor: 'pointer' }}
             >
-              {generating ? '⏳ 생성 중... (1~3분 소요)' : '🔄 이번 주 이슈 새로 생성'}
+              현재 계열 이슈 텍스트 다운로드
             </button>
           </div>
         )}

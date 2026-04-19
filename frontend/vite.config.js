@@ -39,7 +39,11 @@ export default defineConfig({
   ],
   server: {
     proxy: {
-      '/api': 'http://localhost:8001',
+      '/api': {
+        target: 'https://wonwon-coral.vercel.app',
+        changeOrigin: true,
+        secure: true,
+      },
     },
   },
 })
