@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import asyncpg
 import certifi
@@ -11,6 +12,8 @@ from models import IssuePackage, WeeklyBatch
 from config import settings
 
 _pool: asyncpg.Pool | None = None
+
+SUPABASE_ROOT_CA = os.path.join(os.path.dirname(__file__), "supabase-root-2021.crt")
 
 
 def _parse_db_url(db_url: str):
@@ -28,6 +31,8 @@ async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None or _pool._closed:
         ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        if os.path.exists(SUPABASE_ROOT_CA):
+            ssl_ctx.load_verify_locations(cafile=SUPABASE_ROOT_CA)
 
         params = _parse_db_url(settings.database_url)
 
