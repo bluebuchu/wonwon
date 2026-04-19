@@ -136,59 +136,6 @@ async def debug():
     return info
 
 
-@app.get("/api/db-check", tags=["system"])
-async def db_check():
-    """Temporary: diagnose DATABASE_URL on Vercel."""
-    from urllib.parse import urlparse
-
-    raw = os.getenv("DATABASE_URL", "")
-    from config import settings
-    used = settings.database_url
-
-    info = {}
-
-    # 1. Raw env
-    if raw:
-        p = urlparse(raw)
-        info["raw_env"] = {
-            "user": p.username,
-            "pass_len": len(p.password) if p.password else 0,
-            "pass_first": p.password[0] if p.password else None,
-            "pass_last": p.password[-1] if p.password else None,
-            "host": p.hostname,
-            "port": p.port,
-            "db": p.path.lstrip("/"),
-        }
-    else:
-        info["raw_env"] = "(empty)"
-
-    # 2. Settings value
-    if used:
-        p2 = urlparse(used)
-        info["settings"] = {
-            "user": p2.username,
-            "pass_len": len(p2.password) if p2.password else 0,
-            "host": p2.hostname,
-            "port": p2.port,
-        }
-    else:
-        info["settings"] = "(empty)"
-
-    info["same"] = raw == used
-
-    # 3. DB connection test
-    try:
-        from database import get_pool
-        pool = await get_pool()
-        async with pool.acquire() as conn:
-            val = await conn.fetchval("SELECT 1")
-            info["db"] = f"connected ({val})"
-    except Exception as e:
-        info["db"] = f"error: {e}"
-
-    return info
-
-
 @app.get("/", tags=["system"])
 async def root():
     """Root endpoint with service information."""
