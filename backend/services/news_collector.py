@@ -69,19 +69,35 @@ def _get_summary(entry: Any) -> str:
 
 
 async def fetch_feed(outlet: str, url: str) -> List[Dict[str, Any]]:
-    """Fetch and parse a single RSS feed. Returns list of news items."""
-    items = []
+    """Fetch and parse a single RSS feed. Returns list of news items.
+
+    Failures in this function MUST NOT propagate — callers rely on this
+    returning [] on any error so that one bad source does not abort the
+    weekly cron pipeline.
+    """
+    items: List[Dict[str, Any]] = []
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+
     try:
-        # feedparser is synchronous; run in thread for async compatibility
-        import asyncio
-        loop = asyncio.get_event_loop()
         feed = await loop.run_in_executor(None, feedparser.parse, url)
+    except Exception as e:
+        logger.error(f"[{outlet}] feedparser.parse raised, skipping feed: {e}")
+        return []
 
-        if feed.bozo and not feed.entries:
-            logger.warning(f"[{outlet}] Feed parse error: {feed.bozo_exception}")
-            return []
+    if getattr(feed, "bozo", False):
+        logger.warning(
+            f"[{outlet}] Feed bozo (parse warning): {getattr(feed, 'bozo_exception', None)}"
+        )
 
-        for entry in feed.entries:
+    entries = getattr(feed, "entries", None) or []
+    if not entries:
+        logger.warning(f"[{outlet}] No entries available from {url}")
+        return []
+
+    for entry in entries:
+        try:
             title = getattr(entry, "title", "").strip()
             if not title:
                 continue
@@ -90,11 +106,9 @@ async def fetch_feed(outlet: str, url: str) -> List[Dict[str, Any]]:
             summary = _get_summary(entry)
             pub_date = _parse_date(entry)
 
-            # Filter by recency
             if not _is_within_days(pub_date, days=7):
                 continue
 
-            # Filter out excluded topics
             if _should_exclude(title, summary):
                 continue
 
@@ -105,12 +119,11 @@ async def fetch_feed(outlet: str, url: str) -> List[Dict[str, Any]]:
                 "outlet": outlet,
                 "published_at": pub_date.isoformat() if pub_date else None,
             })
+        except Exception as e:
+            logger.warning(f"[{outlet}] Skipping malformed entry: {e}")
+            continue
 
-        logger.info(f"[{outlet}] Collected {len(items)} articles from {url}")
-
-    except Exception as e:
-        logger.error(f"[{outlet}] Failed to fetch feed from {url}: {e}")
-
+    logger.info(f"[{outlet}] Collected {len(items)} articles from {url}")
     return items
 
 
