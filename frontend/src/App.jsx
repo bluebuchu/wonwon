@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import './App.css';
 import { IssueCard } from './components/IssueCard';
 import { fetchLatestIssues, generateIssues } from './api';
@@ -248,6 +249,8 @@ function App() {
           문의: <a href="mailto:july0726@korea.kr">july0726@korea.kr</a>
         </p>
       </footer>
+
+      <Analytics />
     </div>
   );
 }
