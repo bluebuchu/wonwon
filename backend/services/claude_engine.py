@@ -23,6 +23,17 @@ def _get_client():
     return genai.Client(api_key=settings.google_api_key)
 
 
+_SENTENCE_TERMINATORS = (".", "?", "!", "。", "？", "！", "”", "’", "」", "』", "…")
+
+
+def _is_complete_sentence(text: str) -> bool:
+    """reason 문자열이 종결어미/마침표로 끝나는지 검증. 중간에서 끊긴 응답 식별용."""
+    if not text:
+        return False
+    stripped = text.rstrip()
+    return bool(stripped) and stripped.endswith(_SENTENCE_TERMINATORS)
+
+
 def _get_current_week_date() -> str:
     """Return this week's Friday date as YYYY-MM-DD."""
     today = datetime.now(timezone.utc)
@@ -283,12 +294,10 @@ def _build_issue_package(
             grade3=grade_raw.get("grade3", ""),
         )
         reason = raw.get("reason", "")
-        # Enforce character limits
+        # 너무 짧을 때만 안전 패딩. 상한 슬라이스는 종결어미를 잘라내므로 제거
+        # — 길이 검증은 Pydantic max_length=500이, 종결 검증은 _is_complete_sentence가 담당
         if len(reason) < 150:
             reason = reason + " 이 탐구 주제는 학생들이 현재 사회 문제를 학문적으로 분석하고 비판적 사고력을 키우는 데 도움이 된다."
-            reason = reason[:350]
-        elif len(reason) > 350:
-            reason = reason[:350]
 
         return ExplorationTopic(
             topic=raw.get("topic", ""),
@@ -311,6 +320,35 @@ def _build_issue_package(
         mid_topic=build_topic(mid_raw, "중"),
         high_topic=build_topic(high_raw, "상"),
         created_at=datetime.now(timezone.utc),
+    )
+
+
+async def _generate_validated_package(
+    issue: Dict[str, Any],
+    max_retries: int = 2,
+) -> Dict[str, Any]:
+    """
+    generate_exploration_package를 호출하되 mid/high reason이 종결어미로 끝나는지 검증.
+    중간 절단된 응답이면 최대 max_retries회 재생성. 모두 실패하면 ValueError 발생 →
+    호출부(run_weekly_generation)가 해당 이슈를 건너뛴다(저장하지 않음).
+    """
+    title = issue.get("title", "")
+    last_error: str = ""
+    for attempt in range(max_retries + 1):
+        package = await generate_exploration_package(issue)
+        mid_reason = (package.get("mid_topic") or {}).get("reason", "")
+        high_reason = (package.get("high_topic") or {}).get("reason", "")
+        if _is_complete_sentence(mid_reason) and _is_complete_sentence(high_reason):
+            return package
+        last_error = (
+            f"incomplete reason — mid_tail='{mid_reason[-20:]}' "
+            f"high_tail='{high_reason[-20:]}'"
+        )
+        logger.warning(
+            f"[validation] '{title}' attempt {attempt+1}/{max_retries+1}: {last_error}"
+        )
+    raise ValueError(
+        f"reason validation failed after {max_retries+1} attempts: {last_error}"
     )
 
 
@@ -344,7 +382,7 @@ async def run_weekly_generation(
             logger.info(
                 f"Generating package {i+1}/{len(issue_dicts)}: {issue_dict.get('title', '')}"
             )
-            package = await generate_exploration_package(issue_dict)
+            package = await _generate_validated_package(issue_dict)
             issue_package = _build_issue_package(issue_dict, package, week_date)
             issue_packages.append(issue_package)
         except Exception as e:

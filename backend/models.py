@@ -32,8 +32,8 @@ class ExplorationTopic(BaseModel):
     reason: str = Field(
         ...,
         min_length=150,
-        max_length=350,
-        description="탐구 선택 이유 (150-350자)"
+        max_length=500,
+        description="탐구 선택 이유 (목표 150-350자, 종결어미 보존을 위해 상한 500까지 허용)"
     )
     grade_guide: GradeGuide = Field(..., serialization_alias="guide", description="학년별 탐구 가이드")
     level: str = Field(..., pattern="^(중|상)$", description="난이도: 중 또는 상")
