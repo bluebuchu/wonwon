@@ -232,6 +232,22 @@ function App() {
           </div>
         )}
       </main>
+
+      <footer className="app-footer glass-panel">
+        <p className="footer-copyright">© 2026 schoolwins.kr. All rights reserved.</p>
+        <p className="footer-notice">
+          본 사이트의 모든 콘텐츠(이슈 요약 및 AI 생성 콘텐츠)는 저작권법의 보호를 받으며,
+          무단 복제, 배포, 재가공 및 상업적 이용을 금지합니다.
+        </p>
+        <p className="footer-notice">
+          일부 콘텐츠는 AI를 통해 생성되며 정확성이 보장되지 않을 수 있으므로,
+          이용자는 참고용으로만 활용하고 원문 기사 등을 함께 확인해야 합니다.
+        </p>
+        <p className="footer-notice">외부 기사에 대한 저작권은 각 언론사에 있습니다.</p>
+        <p className="footer-contact">
+          문의: <a href="mailto:july0726@korea.kr">july0726@korea.kr</a>
+        </p>
+      </footer>
     </div>
   );
 }
