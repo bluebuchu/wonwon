@@ -1,10 +1,13 @@
+import asyncio
 import json
 import logging
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from config import settings, GEMINI_MODEL, TOTAL_ISSUES, ISSUES_PER_TRACK
@@ -21,6 +24,59 @@ logger = logging.getLogger(__name__)
 
 def _get_client():
     return genai.Client(api_key=settings.google_api_key)
+
+
+_RETRY_MAX_ATTEMPTS = 4
+_RETRY_BASE_DELAY = 1.0
+_RETRY_JITTER = 0.5  # ±0.5s — 동시 retry 타이밍이 겹쳐 다시 503을 유발하지 않도록 분산
+
+
+def _is_retryable_server_error(exc: Exception) -> bool:
+    """5xx (model overloaded 등) 서버 측 일시 오류만 retry 대상으로 한다."""
+    if isinstance(exc, genai_errors.ServerError):
+        return True
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    return isinstance(code, int) and 500 <= code < 600
+
+
+async def _generate_with_retry(
+    client: Any,
+    *,
+    config: types.GenerateContentConfig,
+    contents: str,
+    label: str,
+) -> Any:
+    """
+    Gemini generate_content 호출에 exponential backoff retry 적용.
+    503/500 계열 서버 오류만 재시도하며, validation/JSON/4xx 오류는 즉시 전파한다.
+    """
+    last_error: Exception | None = None
+    for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+        try:
+            return client.models.generate_content(
+                model=GEMINI_MODEL,
+                config=config,
+                contents=contents,
+            )
+        except Exception as e:
+            if not _is_retryable_server_error(e):
+                raise
+            last_error = e
+            if attempt >= _RETRY_MAX_ATTEMPTS:
+                logger.error(
+                    f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
+                    f"failed with server error, no retries left: {e}"
+                )
+                raise
+            base_delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            delay = max(0.0, base_delay + random.uniform(-_RETRY_JITTER, _RETRY_JITTER))
+            logger.warning(
+                f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
+                f"hit server error ({e}); retrying in {delay:.2f}s "
+                f"(base={base_delay:.1f}s, jitter=±{_RETRY_JITTER:.1f}s)"
+            )
+            await asyncio.sleep(delay)
+    raise last_error  # pragma: no cover
 
 
 _SENTENCE_TERMINATORS = (".", "?", "!", "。", "？", "！", "”", "’", "」", "』", "…")
@@ -147,10 +203,11 @@ URL: {item.get('url', '')}
 7. 반드시 유효한 JSON만 반환하고, JSON 외 다른 텍스트는 포함하지 않는다"""
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        response = await _generate_with_retry(
+            client,
             config=types.GenerateContentConfig(system_instruction=CLUSTERING_SYSTEM_PROMPT),
             contents=prompt,
+            label="cluster_and_tag_issues",
         )
         response_text = response.text.strip()
 
@@ -238,10 +295,11 @@ async def generate_exploration_package(issue: Dict[str, Any]) -> Dict[str, Any]:
 5. 반드시 유효한 JSON만 반환하고, JSON 외 다른 텍스트는 포함하지 않는다"""
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        response = await _generate_with_retry(
+            client,
             config=types.GenerateContentConfig(system_instruction=GENERATION_SYSTEM_PROMPT),
             contents=prompt,
+            label=f"generate_exploration_package:{title}",
         )
         response_text = response.text.strip()
 
