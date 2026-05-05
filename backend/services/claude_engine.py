@@ -31,12 +31,46 @@ _RETRY_BASE_DELAY = 1.0
 _RETRY_JITTER = 0.5  # ±0.5s — 동시 retry 타이밍이 겹쳐 다시 503을 유발하지 않도록 분산
 
 
+def _exc_diag(exc: Exception) -> str:
+    """예외의 타입/code/status 등을 한 줄로 요약. SDK 버전 차이로 판정 실패 시 진단용."""
+    return (
+        f"type={type(exc).__module__}.{type(exc).__name__} "
+        f"code={getattr(exc, 'code', None)!r} "
+        f"status_code={getattr(exc, 'status_code', None)!r} "
+        f"status={getattr(exc, 'status', None)!r} "
+        f"msg={str(exc)[:300]}"
+    )
+
+
 def _is_retryable_server_error(exc: Exception) -> bool:
-    """5xx (model overloaded 등) 서버 측 일시 오류만 retry 대상으로 한다."""
+    """
+    5xx 일시 오류만 retry 대상으로 한다. google-genai 버전/래핑 차이를 흡수하기 위해
+    다중 경로로 판정: ServerError → APIError → code/status_code 속성 → status 문자열 → 메시지.
+    """
+    # 1. google-genai 표준 ServerError
     if isinstance(exc, genai_errors.ServerError):
         return True
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    return isinstance(code, int) and 500 <= code < 600
+    # 2. APIError(상위)인데 code가 5xx인 경우 (일부 버전은 ServerError 미사용)
+    if isinstance(exc, genai_errors.APIError):
+        code = getattr(exc, "code", None)
+        if isinstance(code, int) and 500 <= code < 600:
+            return True
+    # 3. 일반 속성 검사 — httpx 계열이나 래핑된 예외 대응
+    for attr in ("code", "status_code"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and 500 <= val < 600:
+            return True
+    # 4. Gemini status 문자열 (UNAVAILABLE=503, INTERNAL=500, DEADLINE_EXCEEDED=504)
+    status = getattr(exc, "status", None)
+    if isinstance(status, str) and status.upper() in {
+        "UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED",
+    }:
+        return True
+    # 5. 마지막 보루: 메시지 패턴 매칭
+    msg = str(exc).lower()
+    if any(tok in msg for tok in ("503", "500", "unavailable", "overloaded", "internal error")):
+        return True
+    return False
 
 
 async def _generate_with_retry(
@@ -47,8 +81,9 @@ async def _generate_with_retry(
     label: str,
 ) -> Any:
     """
-    Gemini generate_content 호출에 exponential backoff retry 적용.
+    Gemini generate_content 호출에 exponential backoff + jitter retry 적용.
     503/500 계열 서버 오류만 재시도하며, validation/JSON/4xx 오류는 즉시 전파한다.
+    어떤 예외든 catch 시점에 진단 로그를 한 번 남겨 추후 분류 검증이 가능하다.
     """
     last_error: Exception | None = None
     for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
@@ -59,20 +94,25 @@ async def _generate_with_retry(
                 contents=contents,
             )
         except Exception as e:
-            if not _is_retryable_server_error(e):
+            diag = _exc_diag(e)
+            retryable = _is_retryable_server_error(e)
+            logger.warning(
+                f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
+                f"caught exception (retryable={retryable}) — {diag}"
+            )
+            if not retryable:
                 raise
             last_error = e
             if attempt >= _RETRY_MAX_ATTEMPTS:
                 logger.error(
-                    f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
-                    f"failed with server error, no retries left: {e}"
+                    f"[gemini-retry] '{label}' exhausted retries after "
+                    f"{attempt}/{_RETRY_MAX_ATTEMPTS}: {e}"
                 )
                 raise
             base_delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             delay = max(0.0, base_delay + random.uniform(-_RETRY_JITTER, _RETRY_JITTER))
             logger.warning(
-                f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
-                f"hit server error ({e}); retrying in {delay:.2f}s "
+                f"[gemini-retry] '{label}' retrying in {delay:.2f}s "
                 f"(base={base_delay:.1f}s, jitter=±{_RETRY_JITTER:.1f}s)"
             )
             await asyncio.sleep(delay)
