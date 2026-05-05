@@ -10,7 +10,14 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from config import settings, GEMINI_MODEL, TOTAL_ISSUES, ISSUES_PER_TRACK
+from config import (
+    settings,
+    GEMINI_MODEL,
+    TOTAL_ISSUES,
+    ISSUES_PER_TRACK,
+    MIN_ISSUES_TOTAL,
+    MIN_ISSUES_PER_TRACK,
+)
 from models import (
     ExplorationTopic,
     GradeGuide,
@@ -490,7 +497,23 @@ async def run_weekly_generation(
             # Continue with remaining issues rather than failing entirely
             continue
 
+    # Threshold guard — 부분 성공으로 기존 정상 batch가 덮여쓰이는 것을 방지.
+    # 미달 시 raise하면 cron이 save_batch를 호출하지 않고 기존 최신 batch가 그대로 유지된다.
+    track_counts: Dict[str, int] = {}
+    for pkg in issue_packages:
+        track_counts[pkg.track.value] = track_counts.get(pkg.track.value, 0) + 1
+    total = len(issue_packages)
+    deficient_tracks = [
+        t for t in ("인문사회", "자연공학", "의약생명")
+        if track_counts.get(t, 0) < MIN_ISSUES_PER_TRACK
+    ]
+    if total < MIN_ISSUES_TOTAL or deficient_tracks:
+        raise ValueError(
+            f"Threshold not met: total={total} (min={MIN_ISSUES_TOTAL}), "
+            f"per_track={track_counts}, deficient={deficient_tracks}"
+        )
+
     logger.info(
-        f"Weekly generation complete: {len(issue_packages)} packages generated"
+        f"Weekly generation complete: total={total}, per_track={track_counts}"
     )
     return issue_packages

@@ -55,6 +55,12 @@ ISSUES_PER_TRACK = 3
 TOTAL_TRACKS = 3
 TOTAL_ISSUES = ISSUES_PER_TRACK * TOTAL_TRACKS  # 9
 
+# Minimum thresholds — 미달 시 부분 batch 저장을 막아 기존 최신 batch가 유지되도록 한다.
+# (save_batch는 같은 week_date의 기존 issues를 DELETE 후 재삽입하므로 부분 성공을 그대로
+# 저장하면 정상 batch가 축소판으로 덮여쓰여 빈 트랙이 생길 수 있다.)
+MIN_ISSUES_TOTAL = 6
+MIN_ISSUES_PER_TRACK = 1
+
 # Gemini model
 GEMINI_MODEL = "gemini-2.5-flash"
 

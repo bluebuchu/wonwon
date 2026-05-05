@@ -29,28 +29,50 @@ async def cron_generate(authorization: str | None = Header(default=None)):
     if not authorization or authorization != expected:
         raise HTTPException(status_code=401, detail="Unauthorized cron call.")
 
-    logger.info(f"[Cron] Weekly generation triggered at {datetime.now(timezone.utc).isoformat()}")
+    started_at = datetime.now(timezone.utc)
+    logger.info(f"[Cron] Weekly generation triggered at {started_at.isoformat()}")
 
+    stage = "init"
     try:
+        stage = "news"
+        logger.info("[Cron][news] collecting RSS feeds")
         news_items = await collect_news()
+        logger.info(f"[Cron][news] collected {len(news_items)} items")
         if not news_items:
+            logger.warning("[Cron][news] no items collected — skipping generation")
             return {"status": "skipped", "reason": "no news items"}
 
+        stage = "generate"
+        logger.info(f"[Cron][generate] starting (input={len(news_items)} items)")
         issue_packages = await run_weekly_generation(news_items)
+        logger.info(f"[Cron][generate] produced {len(issue_packages)} packages")
         if not issue_packages:
+            # run_weekly_generation에서 임계치 미달 시 ValueError를 던지므로 일반적으로
+            # 여기 도달하지 않지만 방어적으로 남겨둔다.
+            logger.warning("[Cron][generate] empty package list — skipping save")
             return {"status": "skipped", "reason": "no packages generated"}
 
+        stage = "save"
         week_date = issue_packages[0].week_date
         batch = WeeklyBatch(
             week_date=week_date,
             issues=issue_packages,
             generated_at=datetime.now(timezone.utc),
         )
+        logger.info(f"[Cron][save] writing batch week_date={week_date} count={len(issue_packages)}")
         await save_batch(batch)
 
-        logger.info(f"[Cron] Saved {len(issue_packages)} issues for week {week_date}")
+        elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
+        logger.info(
+            f"[Cron][done] saved {len(issue_packages)} issues for week {week_date} "
+            f"(elapsed={elapsed:.1f}s)"
+        )
         return {"status": "success", "count": len(issue_packages), "week_date": week_date}
 
     except Exception as e:
-        logger.error(f"[Cron] Failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
+        logger.error(
+            f"[Cron][failed] stage={stage} elapsed={elapsed:.1f}s error={e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=f"stage={stage}: {e}")
