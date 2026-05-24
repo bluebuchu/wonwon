@@ -34,13 +34,19 @@ async def _run_pipeline() -> tuple[int, str]:
         if not news_items:
             raise ValueError("No news items could be collected from RSS feeds")
 
-        # Step 2: Generate issue packages via Claude
+        # Step 2: Generate issue packages via Claude (raw fallback 포함 가능)
         logger.info("[Generate] Generating issue packages via Claude...")
-        issue_packages = await run_weekly_generation(news_items)
-        logger.info(f"[Generate] Generated {len(issue_packages)} issue packages")
+        result = await run_weekly_generation(news_items)
+        issue_packages = result.packages
+        logger.info(
+            f"[Generate] mode={result.mode} partial_success={result.partial_success} "
+            f"generated={result.generated_count} failed={result.failed_count} "
+            f"raw_fallback={result.raw_fallback_count} attempted={result.attempted}"
+        )
 
         if not issue_packages:
-            raise ValueError("Claude failed to generate any issue packages")
+            # RSS가 0건이 아닌데 raw fallback도 비어있는 극단 케이스
+            raise ValueError("No issue packages produced (AI failed and no raw fallback available)")
 
         # Step 3: Save to database
         week_date = issue_packages[0].week_date
@@ -50,7 +56,11 @@ async def _run_pipeline() -> tuple[int, str]:
             generated_at=datetime.now(timezone.utc),
         )
         await save_batch(batch)
-        logger.info(f"[Generate] Saved batch for week {week_date}")
+        logger.info(
+            f"[Generate] Saved batch for week {week_date} mode={result.mode} "
+            f"generated={result.generated_count} failed={result.failed_count} "
+            f"raw_fallback={result.raw_fallback_count}"
+        )
 
         return len(issue_packages), week_date
 

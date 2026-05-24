@@ -3,6 +3,7 @@ import json
 import logging
 import random
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -16,8 +17,32 @@ from config import (
     TOTAL_ISSUES,
     ISSUES_PER_TRACK,
     MIN_ISSUES_TOTAL,
-    MIN_ISSUES_PER_TRACK,
+    RAW_FALLBACK_COUNT,
 )
+
+
+@dataclass
+class WeeklyGenerationResult:
+    """
+    run_weekly_generation의 반환.
+
+    mode:
+      - "normal": AI 정상 경로로 1개 이상 생성됨 (부분 성공 포함)
+      - "raw_fallback": AI 단계 전수 실패로 RSS 원문 N개로 강등 발행
+    """
+    packages: List["IssuePackage"]
+    mode: str
+    generated_count: int        # AI로 생성된 패키지 수
+    failed_count: int           # AI에서 실패한 이슈 수
+    raw_fallback_count: int     # raw fallback으로 채운 카드 수
+    attempted: int              # 클러스터링이 산출한 이슈 후보 수 (raw mode에선 0)
+    failed_titles: List[str]    # AI 실패 이슈 제목 (raw mode에선 [])
+    reason: str | None = None   # "clustering_failed" | "all_issues_failed" | None
+
+    @property
+    def partial_success(self) -> bool:
+        """AI 정상 경로에서 일부만 성공한 경우만 True. raw_fallback은 False."""
+        return self.mode == "normal" and self.failed_count > 0
 from models import (
     ExplorationTopic,
     GradeGuide,
@@ -33,7 +58,7 @@ def _get_client():
     return genai.Client(api_key=settings.google_api_key)
 
 
-_RETRY_MAX_ATTEMPTS = 4
+_RETRY_MAX_ATTEMPTS = 3  # 4 → 3: 503 burst에 짧게 시도 후 raw fallback으로 강등
 _RETRY_BASE_DELAY = 1.0
 _RETRY_JITTER = 0.5  # ±0.5s — 동시 retry 타이밍이 겹쳐 다시 503을 유발하지 않도록 분산
 
@@ -428,6 +453,116 @@ def _build_issue_package(
     )
 
 
+# ---------------------------------------------------------------------------
+# Raw fallback — AI 호출 없이 RSS 원문만으로 IssuePackage를 만든다.
+# Gemini가 다운된 상황에서도 주간 발행을 유지하기 위한 강등 경로.
+# ---------------------------------------------------------------------------
+
+_TRACK_CYCLE: List[TrackType] = [
+    TrackType.humanities_social,
+    TrackType.natural_engineering,
+    TrackType.medical_life,
+]
+
+_RAW_PLACEHOLDER_TOPIC = (
+    "이번 주는 AI 분석 서비스 장애로 원문 뉴스 기반 탐구 카드가 제공됩니다."
+)
+# ExplorationTopic.reason 은 min_length=30 (완화됨). placeholder를 짧게 유지.
+_RAW_PLACEHOLDER_REASON = (
+    "이번 주는 AI 분석 서비스 장애로 원문 뉴스 기반 탐구 카드가 제공됩니다. "
+    "원문 기사 링크를 참고하세요. 다음 정기 발행에서 자동 복구됩니다."
+)
+_RAW_PLACEHOLDER_GRADE = "—"
+
+
+def _build_raw_fallback_packages(
+    news_items: List[Dict[str, Any]],
+    week_date: str,
+    n: int = RAW_FALLBACK_COUNT,
+) -> List[IssuePackage]:
+    """
+    Gemini 호출 없이 RSS 원문 헤드라인만으로 IssuePackage n개를 만든다.
+
+    - published_at 내림차순 상위 n개 선택 (None은 가장 오래된 것으로 취급)
+    - 트랙은 round-robin (TRACK_CYCLE[i % 3])
+    - exploration topics는 placeholder. 사용자에게 raw fallback 모드임을 명시.
+    """
+    if not news_items:
+        return []
+
+    sorted_items = sorted(
+        news_items,
+        key=lambda x: x.get("published_at") or "",
+        reverse=True,
+    )[:n]
+
+    grade_guide = GradeGuide(
+        grade1=_RAW_PLACEHOLDER_GRADE,
+        grade2=_RAW_PLACEHOLDER_GRADE,
+        grade3=_RAW_PLACEHOLDER_GRADE,
+    )
+
+    packages: List[IssuePackage] = []
+    for i, item in enumerate(sorted_items):
+        title = (item.get("title") or "").strip() or "(제목 없음)"
+        summary_text = (item.get("summary") or "").strip() or "원본 기사 링크를 참고하세요."
+        track = _TRACK_CYCLE[i % 3]
+        sources = [NewsSource(
+            outlet=item.get("outlet", ""),
+            url=item.get("url", ""),
+        )]
+        mid_topic = ExplorationTopic(
+            topic=_RAW_PLACEHOLDER_TOPIC,
+            reason=_RAW_PLACEHOLDER_REASON,
+            grade_guide=grade_guide,
+            level="중",
+        )
+        high_topic = ExplorationTopic(
+            topic=_RAW_PLACEHOLDER_TOPIC,
+            reason=_RAW_PLACEHOLDER_REASON,
+            grade_guide=grade_guide,
+            level="상",
+        )
+        packages.append(IssuePackage(
+            id=str(uuid.uuid4()),
+            week_date=week_date,
+            title=title[:300],
+            track=track,
+            summary=summary_text[:500],
+            keywords=[],
+            sources=sources,
+            mid_topic=mid_topic,
+            high_topic=high_topic,
+            created_at=datetime.now(timezone.utc),
+        ))
+    return packages
+
+
+def _make_raw_fallback_result(
+    news_items: List[Dict[str, Any]],
+    week_date: str,
+    *,
+    reason: str,
+    attempted: int = 0,
+    failed_titles: List[str] | None = None,
+) -> WeeklyGenerationResult:
+    raw_packages = _build_raw_fallback_packages(news_items, week_date)
+    logger.warning(
+        f"[raw-fallback] reason={reason} count={len(raw_packages)} "
+        f"attempted={attempted} failed_titles={failed_titles or []}"
+    )
+    return WeeklyGenerationResult(
+        packages=raw_packages,
+        mode="raw_fallback",
+        generated_count=0,
+        failed_count=attempted,  # attempted된 만큼은 실패로 카운트
+        raw_fallback_count=len(raw_packages),
+        attempted=attempted,
+        failed_titles=failed_titles or [],
+        reason=reason,
+    )
+
+
 async def _generate_validated_package(
     issue: Dict[str, Any],
     max_retries: int = 2,
@@ -459,61 +594,92 @@ async def _generate_validated_package(
 
 async def run_weekly_generation(
     news_items: List[Dict[str, Any]],
-) -> List[IssuePackage]:
+) -> WeeklyGenerationResult:
     """
-    Orchestrates the full weekly generation pipeline:
-    1. Cluster news into 9 issues
-    2. Generate exploration packages for each issue
-    3. Return validated IssuePackage objects
+    주간 생성 파이프라인.
+
+    1. clustering (Gemini)
+       - 실패 시 raw fallback 발행 (reason="clustering_failed")
+       - 빈 결과 시 raw fallback 발행 (reason="clustering_empty")
+    2. per-issue 생성 (Gemini) — 개별 실패는 continue
+       - 0건 성공 시 raw fallback 발행 (reason="all_issues_failed")
+    3. 1건 이상 성공 시 normal mode 결과 반환 (partial 포함)
+
+    정책:
+    - 어떤 AI 실패도 호출부로 raise 하지 않는다.
+    - news_items 자체가 비어있는 경우는 호출 전에 cron.py가 거른다 (이 함수에서는 raw 0건).
     """
     week_date = _get_current_week_date()
 
     logger.info(f"Starting weekly generation for week: {week_date}")
     logger.info(f"Input news items: {len(news_items)}")
 
-    # Step 1: Cluster and tag
-    issue_dicts = await cluster_and_tag_issues(news_items)
+    failed_titles: List[str] = []
+
+    # --- Step 1: Cluster ---
+    try:
+        issue_dicts = await cluster_and_tag_issues(news_items)
+    except Exception as e:
+        logger.error(f"[clustering] exhausted retries: {e}", exc_info=True)
+        return _make_raw_fallback_result(
+            news_items, week_date, reason="clustering_failed",
+        )
 
     if not issue_dicts:
-        raise ValueError("Gemini returned no issues from clustering step")
+        logger.warning("[clustering] returned empty issue list")
+        return _make_raw_fallback_result(
+            news_items, week_date, reason="clustering_empty",
+        )
 
-    logger.info(f"Clustered into {len(issue_dicts)} issues")
+    attempted = len(issue_dicts)
+    logger.info(f"Clustered into {attempted} issues")
 
-    # Step 2: Generate exploration packages for each issue
+    # --- Step 2: Per-issue generation (partial-success policy) ---
     issue_packages: List[IssuePackage] = []
-
     for i, issue_dict in enumerate(issue_dicts):
+        title = issue_dict.get("title", f"issue_{i+1}")
         try:
-            logger.info(
-                f"Generating package {i+1}/{len(issue_dicts)}: {issue_dict.get('title', '')}"
-            )
+            logger.info(f"Generating package {i+1}/{attempted}: {title}")
             package = await _generate_validated_package(issue_dict)
             issue_package = _build_issue_package(issue_dict, package, week_date)
             issue_packages.append(issue_package)
         except Exception as e:
-            logger.error(
-                f"Failed to generate package for issue '{issue_dict.get('title', '')}': {e}"
-            )
-            # Continue with remaining issues rather than failing entirely
+            logger.error(f"Failed to generate package for '{title}': {e}")
+            failed_titles.append(title)
             continue
 
-    # Threshold guard — 부분 성공으로 기존 정상 batch가 덮여쓰이는 것을 방지.
-    # 미달 시 raise하면 cron이 save_batch를 호출하지 않고 기존 최신 batch가 그대로 유지된다.
+    generated = len(issue_packages)
+    failed = attempted - generated
+
+    # --- Step 3: 전수 실패도 raw fallback으로 강등 ---
+    if generated < MIN_ISSUES_TOTAL:
+        logger.warning(
+            f"[generation] 0 succeeded out of {attempted}; raw fallback 강등. "
+            f"failed_titles={failed_titles}"
+        )
+        return _make_raw_fallback_result(
+            news_items, week_date,
+            reason="all_issues_failed",
+            attempted=attempted,
+            failed_titles=failed_titles,
+        )
+
     track_counts: Dict[str, int] = {}
     for pkg in issue_packages:
         track_counts[pkg.track.value] = track_counts.get(pkg.track.value, 0) + 1
-    total = len(issue_packages)
-    deficient_tracks = [
-        t for t in ("인문사회", "자연공학", "의약생명")
-        if track_counts.get(t, 0) < MIN_ISSUES_PER_TRACK
-    ]
-    if total < MIN_ISSUES_TOTAL or deficient_tracks:
-        raise ValueError(
-            f"Threshold not met: total={total} (min={MIN_ISSUES_TOTAL}), "
-            f"per_track={track_counts}, deficient={deficient_tracks}"
-        )
-
+    partial = failed > 0
     logger.info(
-        f"Weekly generation complete: total={total}, per_track={track_counts}"
+        f"Weekly generation complete: mode=normal partial_success={partial} "
+        f"generated={generated} failed={failed} attempted={attempted} "
+        f"per_track={track_counts} failed_titles={failed_titles}"
     )
-    return issue_packages
+    return WeeklyGenerationResult(
+        packages=issue_packages,
+        mode="normal",
+        generated_count=generated,
+        failed_count=failed,
+        raw_fallback_count=0,
+        attempted=attempted,
+        failed_titles=failed_titles,
+        reason=None,
+    )

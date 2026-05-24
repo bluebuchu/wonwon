@@ -55,11 +55,17 @@ ISSUES_PER_TRACK = 3
 TOTAL_TRACKS = 3
 TOTAL_ISSUES = ISSUES_PER_TRACK * TOTAL_TRACKS  # 9
 
-# Minimum thresholds — 미달 시 부분 batch 저장을 막아 기존 최신 batch가 유지되도록 한다.
-# (save_batch는 같은 week_date의 기존 issues를 DELETE 후 재삽입하므로 부분 성공을 그대로
-# 저장하면 정상 batch가 축소판으로 덮여쓰여 빈 트랙이 생길 수 있다.)
-MIN_ISSUES_TOTAL = 6
-MIN_ISSUES_PER_TRACK = 1
+# Save 정책: 503 등 일시 과부하로 일부 패키지가 실패해도 사용자에게 가능한 만큼은
+# 발행되도록 partial save를 허용한다. 0개일 때는 raw fallback으로 강등 발행한다.
+# (주의: save_batch가 같은 week_date의 기존 issues를 DELETE 후 재삽입하므로,
+# 같은 주에 정상 batch가 이미 있다면 partial/raw가 그것을 덮어쓸 수 있다 — 의도된 트레이드오프.
+#  AI 복구 후 수동 재실행하면 raw batch가 정상 batch로 깨끗하게 덮어써진다.)
+MIN_ISSUES_TOTAL = 1
+
+# Raw fallback — Gemini 클러스터링 또는 generation 단계가 전수 실패했을 때,
+# RSS 원문(published_at 최신순) 상위 N개로 IssuePackage를 구성해 발행을 유지한다.
+# AI 추가 호출 없음 → 비용 0. placeholder reason은 ExplorationTopic.reason min_length(30)를 통과.
+RAW_FALLBACK_COUNT = 6
 
 # Gemini model
 GEMINI_MODEL = "gemini-2.5-flash"

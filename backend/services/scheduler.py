@@ -41,8 +41,13 @@ async def run_generation_pipeline() -> None:
 
         # Step 2: Generate issue packages via Claude
         logger.info("[Scheduler] Generating issue packages via Claude...")
-        issue_packages = await run_weekly_generation(news_items)
-        logger.info(f"[Scheduler] Generated {len(issue_packages)} issue packages")
+        result = await run_weekly_generation(news_items)
+        issue_packages = result.packages
+        logger.info(
+            f"[Scheduler] mode={result.mode} partial_success={result.partial_success} "
+            f"generated={result.generated_count} failed={result.failed_count} "
+            f"raw_fallback={result.raw_fallback_count} attempted={result.attempted}"
+        )
 
         if not issue_packages:
             logger.warning("[Scheduler] No issue packages generated; aborting save")
@@ -57,8 +62,9 @@ async def run_generation_pipeline() -> None:
         )
         await save_batch(batch)
         logger.info(
-            f"[Scheduler] Saved batch for week {week_date} "
-            f"with {len(issue_packages)} issues"
+            f"[Scheduler] Saved batch for week {week_date} mode={result.mode} "
+            f"generated={result.generated_count} failed={result.failed_count} "
+            f"raw_fallback={result.raw_fallback_count}"
         )
 
     except Exception as e:

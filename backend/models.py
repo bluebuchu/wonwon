@@ -31,9 +31,12 @@ class ExplorationTopic(BaseModel):
     topic: str = Field(..., serialization_alias="question", description="탐구 주제 (질문 형식)")
     reason: str = Field(
         ...,
-        min_length=150,
+        min_length=30,
         max_length=500,
-        description="탐구 선택 이유 (목표 150-350자, 종결어미 보존을 위해 상한 500까지 허용)"
+        description=(
+            "탐구 선택 이유 (AI 생성 시 목표 150-350자, 상한 500. raw fallback 모드의 "
+            "짧은 placeholder를 허용하기 위해 하한은 30으로 완화)"
+        )
     )
     grade_guide: GradeGuide = Field(..., serialization_alias="guide", description="학년별 탐구 가이드")
     level: str = Field(..., pattern="^(중|상)$", description="난이도: 중 또는 상")
