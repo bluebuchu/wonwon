@@ -151,30 +151,41 @@ async def init_db():
 async def save_batch(batch: WeeklyBatch) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO weekly_batches (week_date, generated_at, issue_count)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (week_date) DO UPDATE SET
-                generated_at = EXCLUDED.generated_at,
-                issue_count = EXCLUDED.issue_count
-        """, batch.week_date, batch.generated_at.isoformat(), len(batch.issues))
-
-        await conn.execute(
-            "DELETE FROM issues WHERE week_date = $1", batch.week_date
-        )
-
-        for issue in batch.issues:
+        async with conn.transaction():
             await conn.execute("""
-                INSERT INTO issues (id, week_date, track, title, data, created_at)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-            """,
-                issue.id,
-                issue.week_date,
-                issue.track.value,
-                issue.title,
-                issue.model_dump_json(),
-                issue.created_at.isoformat(),
+                INSERT INTO weekly_batches (week_date, generated_at, issue_count)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (week_date) DO UPDATE SET
+                    generated_at = EXCLUDED.generated_at,
+                    issue_count = EXCLUDED.issue_count
+            """, batch.week_date, batch.generated_at.isoformat(), len(batch.issues))
+
+            await conn.execute(
+                "DELETE FROM issues WHERE week_date = $1", batch.week_date
             )
+
+            for issue in batch.issues:
+                await conn.execute("""
+                    INSERT INTO issues (id, week_date, track, title, data, created_at)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+                """,
+                    issue.id,
+                    issue.week_date,
+                    issue.track.value,
+                    issue.title,
+                    issue.model_dump_json(),
+                    issue.created_at.isoformat(),
+                )
+
+
+async def get_batch_exists(week_date: str) -> bool:
+    """Return True if any batch (normal or fallback) is stored for the given week_date."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM weekly_batches WHERE week_date = $1", week_date
+        )
+        return row is not None
 
 
 async def get_issues_by_week(

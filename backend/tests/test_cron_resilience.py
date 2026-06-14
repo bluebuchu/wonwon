@@ -12,12 +12,13 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from typing import List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # backend/ 디렉터리를 sys.path에 추가 (config, models 등 직접 import 가능하도록)
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
+
 
 # 테스트에서 .env 없이도 모듈이 로드되도록 더미 값 주입
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
@@ -203,8 +204,6 @@ class TestRunWeeklyGenerationPartialSuccess(unittest.TestCase):
 
         async def flaky_validate(issue):
             # 짝수 index는 성공, 홀수는 503 — 9건 중 5건 성공
-            # (테스트 단순화를 위해 success_pkg는 _build_issue_package 입력으로 그대로 사용)
-            # _generate_validated_package는 raw dict를 반환하므로 그것을 흉내냄
             idx = int(issue["title"].split()[-1])
             if idx % 2 == 1:
                 raise Exception("503 UNAVAILABLE")
@@ -248,22 +247,50 @@ class TestRunWeeklyGenerationPartialSuccess(unittest.TestCase):
         self.assertEqual(result.raw_fallback_count, 0)
         self.assertEqual(result.attempted, 9)
         self.assertEqual(len(result.failed_titles), 4)
-        # status는 cron.py에서 partial_success bool을 보고 "partial_success" 문자열로 변환
 
 
 class TestCronEndpointHTTPContract(unittest.TestCase):
-    """cron_generate 핸들러의 응답 구조 — HTTPException 발생/미발생 검증."""
+    """cron_generate 핸들러의 응답 구조 — 상태별 동작 검증."""
+
+    @classmethod
+    def setUpClass(cls):
+        # routers.cron → services.news_collector → feedparser (requires sgmllib3k,
+        # absent in this env). We stub only sys.modules["feedparser"] for the
+        # duration of this import and restore it (to absent) afterwards.
+        # patch.dict cannot be used here: it restores the entire sys.modules
+        # snapshot on exit, which would evict the newly cached routers.cron and
+        # services.news_collector. Manual save/restore of the single key avoids
+        # that while leaving the rest of the module cache intact.
+        if "routers.cron" not in sys.modules:
+            _orig = sys.modules.pop("feedparser", None)
+            sys.modules["feedparser"] = MagicMock()
+            try:
+                import routers.cron  # noqa: F401
+            finally:
+                sys.modules.pop("feedparser", None)
+                if _orig is not None:
+                    sys.modules["feedparser"] = _orig
 
     def setUp(self):
         os.environ["CRON_SECRET"] = "test-secret"
 
-    def _call(self, news_items, gen_result):
+    def _fake_package(self, week_date="2026-05-22") -> IssuePackage:
+        items = [{
+            "title": "fake", "summary": "fake summary",
+            "url": "https://x", "outlet": "o",
+            "published_at": "2026-05-22T10:00:00+00:00",
+        }]
+        return _build_raw_fallback_packages(items, week_date, n=1)[0]
+
+    def _call_normal(self, gen_result):
+        """mode=normal 결과용 헬퍼 (get_batch_exists 불필요)."""
         from routers.cron import cron_generate
+        news = _sample_news(10)
 
         async def runner():
             with patch(
                 "routers.cron.collect_news",
-                new_callable=AsyncMock, return_value=news_items,
+                new_callable=AsyncMock, return_value=news,
             ), patch(
                 "routers.cron.run_weekly_generation",
                 new_callable=AsyncMock, return_value=gen_result,
@@ -273,36 +300,75 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
             ) as mock_save:
                 resp = await cron_generate(authorization="Bearer test-secret")
                 return resp, mock_save
+
         return _run(runner())
 
-    def _fake_package(self, week_date="2026-05-22") -> IssuePackage:
-        from services.claude_engine import _build_raw_fallback_packages
-        # 가짜 RSS 1개로 raw 1개 만들어 IssuePackage 인스턴스 확보
-        items = [{
-            "title": "fake", "summary": "fake summary",
-            "url": "https://x", "outlet": "o",
-            "published_at": "2026-05-22T10:00:00+00:00",
-        }]
-        return _build_raw_fallback_packages(items, week_date, n=1)[0]
+    def _call_fallback(self, gen_result, existing_batch: bool):
+        """mode=raw_fallback 결과용 헬퍼 (get_batch_exists 필요)."""
+        from routers.cron import cron_generate
+        news = _sample_news(10)
 
-    def test_raw_fallback_response_is_200_with_status_success(self):
-        from services.claude_engine import _build_raw_fallback_packages
+        async def runner():
+            with patch(
+                "routers.cron.collect_news",
+                new_callable=AsyncMock, return_value=news,
+            ), patch(
+                "routers.cron.run_weekly_generation",
+                new_callable=AsyncMock, return_value=gen_result,
+            ), patch(
+                "routers.cron.save_batch",
+                new_callable=AsyncMock,
+            ) as mock_save, patch(
+                "routers.cron.get_batch_exists",
+                new_callable=AsyncMock, return_value=existing_batch,
+            ):
+                resp = await cron_generate(authorization="Bearer test-secret")
+                return resp, mock_save
+
+        return _run(runner())
+
+    def _make_raw_fallback_result(self):
         news = _sample_news(10)
         raw_packages = _build_raw_fallback_packages(news, "2026-05-22")
-        gen_result = WeeklyGenerationResult(
+        return WeeklyGenerationResult(
             packages=raw_packages, mode="raw_fallback",
             generated_count=0, failed_count=0, raw_fallback_count=6,
             attempted=0, failed_titles=[], reason="clustering_failed",
         )
 
-        resp, mock_save = self._call(news, gen_result)
-        self.assertEqual(resp["status"], "success")  # raw fallback도 status=success
+    # ── raw_fallback + 기존 배치 없음 → fallback 저장 ────────────────────────
+
+    def test_raw_fallback_no_existing_batch_returns_fallback_status(self):
+        gen_result = self._make_raw_fallback_result()
+        resp, mock_save = self._call_fallback(gen_result, existing_batch=False)
+
+        self.assertEqual(resp["status"], "fallback")
         self.assertEqual(resp["mode"], "raw_fallback")
         self.assertEqual(resp["raw_fallback_count"], 6)
         self.assertEqual(resp["reason"], "clustering_failed")
         self.assertFalse(resp["partial_success"])
-        # DB save 호출 검증
+        self.assertFalse(resp["existing_batch_found"])
+        self.assertFalse(resp["preserved_previous"])
+        self.assertTrue(resp["save_attempted"])
         mock_save.assert_awaited_once()
+
+    # ── raw_fallback + 기존 배치 있음 → 저장 생략, 기존 유지 ─────────────────
+
+    def test_raw_fallback_with_existing_batch_returns_preserved_previous(self):
+        gen_result = self._make_raw_fallback_result()
+        resp, mock_save = self._call_fallback(gen_result, existing_batch=True)
+
+        self.assertEqual(resp["status"], "preserved_previous")
+        self.assertEqual(resp["mode"], "raw_fallback")
+        self.assertEqual(resp["raw_fallback_count"], 6)
+        self.assertEqual(resp["generated_count"], 0)
+        self.assertTrue(resp["existing_batch_found"])
+        self.assertTrue(resp["preserved_previous"])
+        self.assertFalse(resp["save_attempted"])
+        # save_batch는 호출되어서는 안 됨
+        mock_save.assert_not_awaited()
+
+    # ── normal 모드: 부분 성공 ────────────────────────────────────────────────
 
     def test_partial_success_status_is_partial_success(self):
         gen_result = WeeklyGenerationResult(
@@ -311,15 +377,19 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
             raw_fallback_count=0, attempted=9,
             failed_titles=["a", "b", "c", "d", "e"], reason=None,
         )
-        news = _sample_news(10)
-        resp, mock_save = self._call(news, gen_result)
+        resp, mock_save = self._call_normal(gen_result)
+
         self.assertEqual(resp["status"], "partial_success")
         self.assertEqual(resp["mode"], "normal")
         self.assertTrue(resp["partial_success"])
         self.assertEqual(resp["generated_count"], 4)
         self.assertEqual(resp["failed_count"], 5)
         self.assertEqual(len(resp["failed_titles"]), 5)
+        self.assertFalse(resp["preserved_previous"])
+        self.assertTrue(resp["save_attempted"])
         mock_save.assert_awaited_once()
+
+    # ── normal 모드: 전체 성공 ────────────────────────────────────────────────
 
     def test_full_success_status_is_success(self):
         gen_result = WeeklyGenerationResult(
@@ -328,12 +398,30 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
             raw_fallback_count=0, attempted=9,
             failed_titles=[], reason=None,
         )
-        news = _sample_news(10)
-        resp, mock_save = self._call(news, gen_result)
+        resp, mock_save = self._call_normal(gen_result)
+
         self.assertEqual(resp["status"], "success")
         self.assertEqual(resp["mode"], "normal")
         self.assertFalse(resp["partial_success"])
+        self.assertEqual(resp["generated_count"], 9)
+        self.assertFalse(resp["preserved_previous"])
+        self.assertTrue(resp["save_attempted"])
         mock_save.assert_awaited_once()
+
+    # ── 새 로그 필드: rss_collected 포함 확인 ────────────────────────────────
+
+    def test_response_includes_rss_collected(self):
+        gen_result = WeeklyGenerationResult(
+            packages=[self._fake_package()],
+            mode="normal", generated_count=9, failed_count=0,
+            raw_fallback_count=0, attempted=9,
+            failed_titles=[], reason=None,
+        )
+        resp, _ = self._call_normal(gen_result)
+        self.assertIn("rss_collected", resp)
+        self.assertEqual(resp["rss_collected"], 10)  # _sample_news(10)
+
+    # ── RSS 0건 → skipped, save_batch 미호출 ──────────────────────────────────
 
     def test_rss_empty_returns_skipped_without_save(self):
         from routers.cron import cron_generate
@@ -351,7 +439,11 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
         resp, mock_save = _run(runner())
         self.assertEqual(resp["status"], "skipped")
         self.assertEqual(resp["reason"], "no_news_items")
+        self.assertEqual(resp["rss_collected"], 0)
+        self.assertFalse(resp["save_attempted"])
         mock_save.assert_not_awaited()
+
+    # ── 인증 실패 → 401 ────────────────────────────────────────────────────────
 
     def test_unauthorized_raises_401(self):
         from fastapi import HTTPException
@@ -360,6 +452,8 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             _run(cron_generate(authorization="Bearer wrong"))
         self.assertEqual(ctx.exception.status_code, 401)
+
+    # ── DB save 실패 → 500 ─────────────────────────────────────────────────────
 
     def test_db_save_failure_raises_500(self):
         from fastapi import HTTPException
@@ -390,6 +484,19 @@ class TestCronEndpointHTTPContract(unittest.TestCase):
             _run(runner())
         self.assertEqual(ctx.exception.status_code, 500)
         self.assertIn("stage=save", ctx.exception.detail)
+
+    # ── ai_generated=0 + raw_fallback>0 를 success로 기록하지 않음 ─────────────
+
+    def test_raw_fallback_is_never_recorded_as_success(self):
+        gen_result = self._make_raw_fallback_result()
+
+        # existing=False → fallback
+        resp_no_existing, _ = self._call_fallback(gen_result, existing_batch=False)
+        self.assertNotEqual(resp_no_existing["status"], "success")
+
+        # existing=True → preserved_previous
+        resp_existing, _ = self._call_fallback(gen_result, existing_batch=True)
+        self.assertNotEqual(resp_existing["status"], "success")
 
 
 class TestRetryAttemptsReduced(unittest.TestCase):
