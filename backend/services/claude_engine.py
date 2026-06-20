@@ -1,7 +1,8 @@
 import asyncio
 import json
 import logging
-import random
+import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -58,9 +59,45 @@ def _get_client():
     return genai.Client(api_key=settings.google_api_key)
 
 
-_RETRY_MAX_ATTEMPTS = 3  # 4 → 3: 503 burst에 짧게 시도 후 raw fallback으로 강등
-_RETRY_BASE_DELAY = 1.0
-_RETRY_JITTER = 0.5  # ±0.5s — 동시 retry 타이밍이 겹쳐 다시 503을 유발하지 않도록 분산
+def _remaining_budget_s() -> float:
+    """파이프라인 시작 기준 남은 처리 시간(초)을 반환한다.
+    _pipeline_start_time이 0이면 (파이프라인 외부 단독 호출) 무제한(inf)으로 취급한다."""
+    if _pipeline_start_time == 0.0:
+        return float("inf")
+    return _PIPELINE_SOFT_DEADLINE_S - (time.monotonic() - _pipeline_start_time)
+
+
+# --- 호출 간격 · 재시도 상수 ---------------------------------------------------
+# 아래 값을 조정해 호출 정책을 바꿀 수 있다.
+
+_GEMINI_MIN_INTERVAL: float = 15.0
+"""모든 Gemini API 호출 간 최소 간격(초).
+5 RPM 무료 티어 기준 최소 12s 필요 + 3s 안전 버퍼."""
+
+_RETRY_MAX_ATTEMPTS: int = 3
+"""503/5xx 서버 오류 시 총 시도 횟수 (최초 1회 포함, 재시도 최대 2회)."""
+
+_RETRY_429_MAX_RETRIES: int = 3
+"""429 요청 한도 초과 시 최대 재시도 횟수 (첫 429 이후 최대 3번 더 시도)."""
+
+_RETRY_429_DEFAULT_WAIT: float = 60.0
+"""429 응답에 RetryInfo.retryDelay가 없을 때 적용할 기본 대기 시간(초)."""
+
+_last_call_start: float = 0.0
+"""마지막 Gemini API 호출을 시작한 시각 (time.monotonic() 기준).
+_wait_for_rate_limit()가 갱신한다."""
+
+_PIPELINE_SOFT_DEADLINE_S: float = 250.0
+"""파이프라인 내부 처리 마감시간(초). Vercel maxDuration(300s)에서 50s 마진을 뺀 값.
+이 시간이 경과하면 새로운 Gemini 호출을 시작하지 않는다."""
+
+_MIN_REMAINING_FOR_NEW_CALL_S: float = 25.0
+"""새 Gemini 호출을 시작하기 위해 남아 있어야 하는 최소 여유 시간(초).
+rate gate 15s + API 응답 예상 시간 ~10s."""
+
+_pipeline_start_time: float = 0.0
+"""run_weekly_generation 시작 시각 (time.monotonic() 기준).
+_remaining_budget_s()가 이 값을 참조한다."""
 
 
 def _exc_diag(exc: Exception) -> str:
@@ -105,6 +142,76 @@ def _is_retryable_server_error(exc: Exception) -> bool:
     return False
 
 
+async def _wait_for_rate_limit(label: str = "") -> None:
+    """
+    모든 Gemini API 호출 직전에 반드시 호출하는 전역 속도 제한 게이트.
+
+    _last_call_start 기준으로 _GEMINI_MIN_INTERVAL(15s)이 경과하지 않았으면
+    부족분을 대기한 뒤 _last_call_start를 현재 시각으로 갱신한다.
+
+    클러스터링, 이슈 생성, 503 재시도, 429 재시도 모두 이 게이트를 통과한다.
+    실제 요청 시작 시각 기준으로 간격을 계산하므로 API 응답 시간은 간격에 포함되지 않는다.
+    """
+    global _last_call_start
+    now = time.monotonic()
+    elapsed = now - _last_call_start
+    if elapsed < _GEMINI_MIN_INTERVAL:
+        gap = _GEMINI_MIN_INTERVAL - elapsed
+        logger.info(
+            f"[rate-gate] '{label}' elapsed={elapsed:.1f}s < {_GEMINI_MIN_INTERVAL}s — "
+            f"sleeping {gap:.2f}s"
+        )
+        await asyncio.sleep(gap)
+    _last_call_start = time.monotonic()
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """
+    429 RESOURCE_EXHAUSTED(요청 한도 초과) 여부를 판정한다.
+    SDK 버전·래핑 차이를 흡수하기 위해 다중 경로로 판정한다.
+    """
+    if isinstance(exc, genai_errors.ClientError):
+        if getattr(exc, "code", None) == 429:
+            return True
+    for attr in ("code", "status_code"):
+        if getattr(exc, attr, None) == 429:
+            return True
+    status = getattr(exc, "status", None)
+    if isinstance(status, str) and status.upper() == "RESOURCE_EXHAUSTED":
+        return True
+    msg = str(exc).lower()
+    return any(tok in msg for tok in ("429", "resource exhausted", "quota exceeded", "rate limit"))
+
+
+def _extract_429_retry_delay(exc: Exception) -> float | None:
+    """
+    429 응답의 RetryInfo.retryDelay를 읽어 초 단위로 반환한다. 파싱 불가 시 None 반환.
+
+    시도 순서:
+    1. SDK retry_delay 속성 (datetime.timedelta 또는 숫자)
+    2. error.details 리스트의 gRPC RetryInfo 구조체
+    3. 에러 메시지의 "retry after Ns" 패턴
+    """
+    raw = getattr(exc, "retry_delay", None)
+    if raw is not None:
+        if hasattr(raw, "total_seconds"):
+            return float(raw.total_seconds())
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    for detail in getattr(exc, "details", []) or []:
+        rd = getattr(detail, "retry_delay", None)
+        if rd is not None:
+            seconds = getattr(rd, "seconds", 0) or 0
+            nanos = getattr(rd, "nanos", 0) or 0
+            return float(seconds + nanos / 1e9)
+    m = re.search(r"retry[_ ]?after[:\s]+(\d+(?:\.\d+)?)\s*s", str(exc).lower())
+    if m:
+        return float(m.group(1))
+    return None
+
+
 async def _generate_with_retry(
     client: Any,
     *,
@@ -113,12 +220,23 @@ async def _generate_with_retry(
     label: str,
 ) -> Any:
     """
-    Gemini generate_content 호출에 exponential backoff + jitter retry 적용.
-    503/500 계열 서버 오류만 재시도하며, validation/JSON/4xx 오류는 즉시 전파한다.
-    어떤 예외든 catch 시점에 진단 로그를 한 번 남겨 추후 분류 검증이 가능하다.
+    Gemini generate_content 호출에 전역 호출 간격 제어 + 재시도 정책 적용.
+
+    모든 호출(최초·503 재시도·429 재시도) 전 _wait_for_rate_limit()를 통해
+    _GEMINI_MIN_INTERVAL(15s) 간격을 보장한다.
+
+    - 429: RetryInfo.retryDelay와 _GEMINI_MIN_INTERVAL 중 max를 대기.
+           최대 _RETRY_429_MAX_RETRIES회 재시도 후 초과 시 raise.
+    - 503/5xx: rate gate 통과 후 재시도. 총 _RETRY_MAX_ATTEMPTS회 시도 후 raise.
+    - 기타 4xx / 파싱 오류: 즉시 raise.
     """
-    last_error: Exception | None = None
-    for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+    server_errors = 0   # 5xx 오류 누적 횟수 (첫 시도 포함)
+    rate_errors = 0     # 429 누적 횟수
+
+    while True:
+        # ── 전역 호출 간격 게이트 (클러스터링·이슈·503·429 재시도 모두 통과) ──
+        await _wait_for_rate_limit(label)
+
         try:
             return client.models.generate_content(
                 model=GEMINI_MODEL,
@@ -127,28 +245,61 @@ async def _generate_with_retry(
             )
         except Exception as e:
             diag = _exc_diag(e)
+
+            # ── 429 RESOURCE_EXHAUSTED ────────────────────────────────────────
+            if _is_rate_limit_error(e):
+                rate_errors += 1
+                logger.warning(
+                    f"[gemini-retry] '{label}' 429 rate limit "
+                    f"(occurrence {rate_errors}/{_RETRY_429_MAX_RETRIES}) — {diag}"
+                )
+                if rate_errors > _RETRY_429_MAX_RETRIES:
+                    logger.error(
+                        f"[gemini-retry] '{label}' 429 exhausted after "
+                        f"{rate_errors} occurrences — raising"
+                    )
+                    raise
+                raw_delay = _extract_429_retry_delay(e)
+                wait = max(
+                    raw_delay if raw_delay is not None else _RETRY_429_DEFAULT_WAIT,
+                    _GEMINI_MIN_INTERVAL,
+                )
+                # 예산 초과 확인: 대기 후 재시도할 시간이 남지 않으면 이슈 실패 처리
+                remaining = _remaining_budget_s()
+                if wait + _MIN_REMAINING_FOR_NEW_CALL_S > remaining:
+                    logger.warning(
+                        f"[gemini-retry] '{label}' 429 wait {wait:.0f}s + "
+                        f"min_call {_MIN_REMAINING_FOR_NEW_CALL_S:.0f}s "
+                        f"> remaining {remaining:.0f}s — "
+                        f"skipping retry to stay within deadline"
+                    )
+                    raise
+                logger.warning(
+                    f"[gemini-retry] '{label}' 429 waiting {wait:.1f}s "
+                    f"(RetryInfo={raw_delay}s, floor={_GEMINI_MIN_INTERVAL}s, "
+                    f"remaining={remaining:.0f}s)"
+                )
+                await asyncio.sleep(wait)
+                # 429 대기는 min_interval 이상이므로 다음 루프의 rate gate는 즉시 통과.
+                continue
+
+            # ── 503/5xx 서버 오류 ─────────────────────────────────────────────
             retryable = _is_retryable_server_error(e)
+            server_errors += 1
             logger.warning(
-                f"[gemini-retry] '{label}' attempt {attempt}/{_RETRY_MAX_ATTEMPTS} "
-                f"caught exception (retryable={retryable}) — {diag}"
+                f"[gemini-retry] '{label}' server error attempt "
+                f"{server_errors}/{_RETRY_MAX_ATTEMPTS} (retryable={retryable}) — {diag}"
             )
             if not retryable:
                 raise
-            last_error = e
-            if attempt >= _RETRY_MAX_ATTEMPTS:
+            if server_errors >= _RETRY_MAX_ATTEMPTS:
                 logger.error(
-                    f"[gemini-retry] '{label}' exhausted retries after "
-                    f"{attempt}/{_RETRY_MAX_ATTEMPTS}: {e}"
+                    f"[gemini-retry] '{label}' 503 exhausted after "
+                    f"{server_errors}/{_RETRY_MAX_ATTEMPTS} attempts — raising"
                 )
                 raise
-            base_delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            delay = max(0.0, base_delay + random.uniform(-_RETRY_JITTER, _RETRY_JITTER))
-            logger.warning(
-                f"[gemini-retry] '{label}' retrying in {delay:.2f}s "
-                f"(base={base_delay:.1f}s, jitter=±{_RETRY_JITTER:.1f}s)"
-            )
-            await asyncio.sleep(delay)
-    raise last_error  # pragma: no cover
+            # 다음 루프의 _wait_for_rate_limit()가 15s 간격을 보장.
+            # 이전의 짧은 exponential backoff(1s, 2s)는 rate gate로 대체됨.
 
 
 _SENTENCE_TERMINATORS = (".", "?", "!", "。", "？", "！", "”", "’", "」", "』", "…")
@@ -565,12 +716,12 @@ def _make_raw_fallback_result(
 
 async def _generate_validated_package(
     issue: Dict[str, Any],
-    max_retries: int = 2,
+    max_retries: int = 1,
 ) -> Dict[str, Any]:
     """
     generate_exploration_package를 호출하되 mid/high reason이 종결어미로 끝나는지 검증.
-    중간 절단된 응답이면 최대 max_retries회 재생성. 모두 실패하면 ValueError 발생 →
-    호출부(run_weekly_generation)가 해당 이슈를 건너뛴다(저장하지 않음).
+    중간 절단된 응답이면 최대 max_retries회 재생성(기본 1회 → 이슈당 최대 2회 Gemini 호출).
+    모두 실패하면 ValueError 발생 → 호출부(run_weekly_generation)가 건너뛴다.
     """
     title = issue.get("title", "")
     last_error: str = ""
@@ -602,6 +753,7 @@ async def run_weekly_generation(
        - 실패 시 raw fallback 발행 (reason="clustering_failed")
        - 빈 결과 시 raw fallback 발행 (reason="clustering_empty")
     2. per-issue 생성 (Gemini) — 개별 실패는 continue
+       - 각 이슈 전 내부 마감시간 체크 (_PIPELINE_SOFT_DEADLINE_S=250s)
        - 0건 성공 시 raw fallback 발행 (reason="all_issues_failed")
     3. 1건 이상 성공 시 normal mode 결과 반환 (partial 포함)
 
@@ -609,10 +761,17 @@ async def run_weekly_generation(
     - 어떤 AI 실패도 호출부로 raise 하지 않는다.
     - news_items 자체가 비어있는 경우는 호출 전에 cron.py가 거른다 (이 함수에서는 raw 0건).
     """
+    global _pipeline_start_time
+    _pipeline_start_time = time.monotonic()
+
     week_date = _get_current_week_date()
 
     logger.info(f"Starting weekly generation for week: {week_date}")
     logger.info(f"Input news items: {len(news_items)}")
+    logger.info(
+        f"[deadline] soft_deadline={_PIPELINE_SOFT_DEADLINE_S}s "
+        f"min_per_call={_MIN_REMAINING_FOR_NEW_CALL_S}s"
+    )
 
     failed_titles: List[str] = []
 
@@ -638,8 +797,28 @@ async def run_weekly_generation(
     issue_packages: List[IssuePackage] = []
     for i, issue_dict in enumerate(issue_dicts):
         title = issue_dict.get("title", f"issue_{i+1}")
+
+        # ── 내부 마감시간 체크: 여유가 없으면 남은 이슈를 모두 실패 처리 ──────
+        remaining = _remaining_budget_s()
+        if remaining < _MIN_REMAINING_FOR_NEW_CALL_S:
+            skipped = [
+                d.get("title", f"issue_{j+1}")
+                for j, d in enumerate(issue_dicts[i:], i)
+            ]
+            logger.warning(
+                f"[deadline] {remaining:.0f}s remaining < "
+                f"{_MIN_REMAINING_FOR_NEW_CALL_S}s — "
+                f"stopping at issue {i+1}/{attempted}. "
+                f"Skipping: {skipped}"
+            )
+            failed_titles.extend(skipped)
+            break
+
         try:
-            logger.info(f"Generating package {i+1}/{attempted}: {title}")
+            logger.info(
+                f"Generating package {i+1}/{attempted}: {title} "
+                f"(remaining={remaining:.0f}s)"
+            )
             package = await _generate_validated_package(issue_dict)
             issue_package = _build_issue_package(issue_dict, package, week_date)
             issue_packages.append(issue_package)
